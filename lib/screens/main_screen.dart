@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
+import 'attendance_screen.dart'; // Pastikan file ini sudah ada
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -14,10 +15,10 @@ class _MainScreenState extends State<MainScreen> {
   // Daftar halaman yang akan ditampilkan
   final List<Widget> _screens = [
     const HomeScreen(),
-    const Center(child: Text("Attendance Screen Placeholder", style: TextStyle(color: Colors.white))),
-    const Center(child: Text("History Screen Placeholder", style: TextStyle(color: Colors.white))),
-    const Center(child: Text("Notifications Screen Placeholder", style: TextStyle(color: Colors.white))),
-    const Center(child: Text("Profile Screen Placeholder", style: TextStyle(color: Colors.white))),
+    const AttendanceScreen(), // <-- Layar absen wajah ditaruh di sini
+    const Center(child: Text("History Screen Placeholder", style: TextStyle(color: Colors.black))),
+    const Center(child: Text("Notifications Screen Placeholder", style: TextStyle(color: Colors.black))),
+    const Center(child: Text("Profile Screen Placeholder", style: TextStyle(color: Colors.black))),
   ];
 
   // Data Navigasi (Icon non-aktif, Icon aktif, Label)
@@ -31,17 +32,13 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Menghitung lebar tiap item navigasi secara dinamis
     double totalWidth = MediaQuery.of(context).size.width;
     double navItemWidth = totalWidth / _navItemsData.length;
-    
-    // Diameter lingkaran background
     double indicatorDiameter = 56.0; 
-    // Tinggi Bottom Bar
     double bottomBarHeight = 76.0; 
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A), // Sesuaikan background utama gelap kamu
+      backgroundColor: const Color(0xFFF8F9FA), // Surface color
       body: IndexedStack(
         index: _currentIndex,
         children: _screens,
@@ -49,34 +46,32 @@ class _MainScreenState extends State<MainScreen> {
       bottomNavigationBar: Container(
         height: bottomBarHeight,
         decoration: BoxDecoration(
-          color: const Color(0xFFF8F9FA), // Surface bright dari HTML kamu
+          color: const Color(0xFFF8F9FA),
           border: Border(top: BorderSide(color: const Color(0xFFC1C6D6).withOpacity(0.3))),
           boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.01), blurRadius: 4, offset: const Offset(0, -2))
+            BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 8, offset: const Offset(0, -2))
           ],
         ),
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // --- 1. CIRCULAR MOVING INDICATOR (Background Lingkaran) ---
+            // --- CIRCULAR MOVING INDICATOR ---
             AnimatedPositioned(
-              duration: const Duration(milliseconds: 350), // Kecepatan geser lingkaran
-              curve: Curves.easeOutQuart, // Gerakan yang smooth
-              // Hitung posisi horizontal lingkaran (berdasarkan index aktif)
+              duration: const Duration(milliseconds: 350), 
+              curve: Curves.easeOutQuart,
               left: (navItemWidth * _currentIndex) + (navItemWidth / 2) - (indicatorDiameter / 2),
-              // Hitung posisi vertikal agar lingkaran berada di tengah area ikon
-              top: (bottomBarHeight - indicatorDiameter) / 2 - 4, // Sedikit geser ke atas biar gak mepet teks
+              top: (bottomBarHeight - indicatorDiameter) / 2 - 4,
               child: Container(
-                width: indicatorDiameter, // Gunakan diameter yang sama (lebar = tinggi)
+                width: indicatorDiameter, 
                 height: indicatorDiameter,
                 decoration: const BoxDecoration(
                   color: Color(0xFFD2E6EF), // secondary-container color
-                  shape: BoxShape.circle, // Membuatnya menjadi lingkaran sempurna
+                  shape: BoxShape.circle, 
                 ),
               ),
             ),
 
-            // --- 2. THE NAV ITEMS (Ikon & Label) ---
+            // --- NAV ITEMS ---
             Positioned.fill(
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -93,14 +88,14 @@ class _MainScreenState extends State<MainScreen> {
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       width: navItemWidth,
-                      color: Colors.transparent, // Biar area kliknya luas
+                      color: Colors.transparent, 
                       alignment: Alignment.center,
                       child: StatefulNavItem(
                         iconData: _navItemsData[index]["icon"],
                         activeIconData: _navItemsData[index]["activeIcon"],
                         label: _navItemsData[index]["label"],
                         isActive: _currentIndex == index,
-                        hasBadge: index == 3, // Asumsi Notifications ada badge
+                        hasBadge: index == 3, 
                         circleDiameter: indicatorDiameter,
                       ),
                     ),
@@ -115,9 +110,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 }
 
-// =========================================================================
-// WIDGET KHUSUS UNTUK ICON NAVIGASI (Hanya pakai animasi Scale & Color)
-// =========================================================================
 class StatefulNavItem extends StatefulWidget {
   final IconData iconData;
   final IconData activeIconData;
@@ -142,7 +134,6 @@ class StatefulNavItem extends StatefulWidget {
 
 class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  // Tween untuk animasi perbesaran ikon (Scale)
   late Animation<double> _scaleAnimation;
 
   @override
@@ -150,28 +141,22 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300), // Kecepatan animasi pop-up
+      duration: const Duration(milliseconds: 300), 
     );
-
-    // Animasi membesar dikit (Scale) dari 90% ke 100%
     _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack), // Efek membal di akhir
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
     );
-
-    if (widget.isActive) {
-      _controller.forward(); // Jalankan animasi jika aktif saat pertama kali load
-    }
+    if (widget.isActive) _controller.forward();
   }
 
   @override
   void didUpdateWidget(covariant StatefulNavItem oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Cek perubahan status aktif/tidak aktif
     if (widget.isActive != oldWidget.isActive) {
       if (widget.isActive) {
-        _controller.forward(); // Perbesar ikon pas aktif
+        _controller.forward(); 
       } else {
-        _controller.reverse(); // Kecilkan kembali ikon pas non-aktif
+        _controller.reverse(); 
       }
     }
   }
@@ -184,16 +169,12 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    // Warna aktif dan non-aktif
-    Color activeColor = const Color(0xFF55676F); // on-secondary-container
-    Color inactiveColor = const Color(0xFF414754); // on-surface-variant
+    Color activeColor = const Color(0xFF55676F); 
+    Color inactiveColor = const Color(0xFF414754); 
 
     return Column(
-      mainAxisSize: MainAxisSize.min, // Hug content
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // --- ANIMATED ICON AREA (Tinggal Scale & Color aja) ---
-        // Kita bungkus ikon dalam SizedBox dengan ukuran yang sama dengan diameter lingkaran
-        // agar ikon diam di tengah-tengah area lingkaran.
         SizedBox(
           width: widget.circleDiameter,
           height: widget.circleDiameter,
@@ -207,19 +188,14 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
                   Icon(
                     widget.isActive ? widget.activeIconData : widget.iconData,
                     color: widget.isActive ? activeColor : inactiveColor,
-                    size: widget.isActive ? 26 : 24, // Subtle increase
+                    size: widget.isActive ? 26 : 24, 
                   ),
-                  // Badge Notifikasi
                   if (widget.hasBadge)
                     Positioned(
-                      right: -2,
-                      top: -2,
+                      right: -2, top: -2,
                       child: Container(
                         width: 8, height: 8,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFBA1A1A), // Error color
-                          shape: BoxShape.circle,
-                        ),
+                        decoration: const BoxDecoration(color: Color(0xFFBA1A1A), shape: BoxShape.circle),
                       ),
                     ),
                 ],
@@ -227,11 +203,9 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
             ),
           ),
         ),
-        const SizedBox(height: 0), // Atur jarak ikon ke teks
-        // --- TEXT LABEL (Memudar masuk/keluar) ---
         AnimatedOpacity(
           duration: const Duration(milliseconds: 200),
-          opacity: widget.isActive ? 1.0 : 0.7, // Redupkan teks non-aktif
+          opacity: widget.isActive ? 1.0 : 0.7, 
           child: Text(
             widget.label,
             style: TextStyle(

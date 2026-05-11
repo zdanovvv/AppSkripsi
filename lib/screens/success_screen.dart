@@ -112,9 +112,9 @@ class SuccessScreen extends StatelessWidget {
                     width: double.infinity, height: 56,
                     child: ElevatedButton(
                       onPressed: () {
-                        // Kembali ke layar awal (Home) dan buang tumpukan navigasi sebelumnya
-                        Navigator.popUntil(context, (route) => route.isFirst);
-                      },
+                      // Kembali ke layar awal (Home) dan buang semua tumpukan layar sebelumnya (GPS, Wajah)
+                      Navigator.popUntil(context, (route) => route.isFirst);
+                    },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: primary,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
