@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'main_screen.dart'; // WAJIB IMPORT INI
 
 class SuccessScreen extends StatelessWidget {
   const SuccessScreen({Key? key}) : super(key: key);
 
-  // Warna Material 3
+  // Warna Material 3 sesuai desain kamu
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerLowest = const Color(0xFFFFFFFF);
   final Color surfaceContainerLow = const Color(0xFFF3F4F5);
@@ -23,12 +24,15 @@ class SuccessScreen extends StatelessWidget {
       backgroundColor: surface,
       body: Stack(
         children: [
-          // Ambient Background Elements (Blurry circles)
+          // Efek bulatan blur di background agar estetik
           Positioned(
             top: -100, left: -100,
             child: Container(
               width: 300, height: 300,
-              decoration: BoxDecoration(color: primaryContainer.withOpacity(0.15), shape: BoxShape.circle),
+              decoration: BoxDecoration(
+                color: primaryContainer.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
             ),
           ),
           
@@ -39,10 +43,14 @@ class SuccessScreen extends StatelessWidget {
                 children: [
                   const Spacer(),
 
-                  // --- Hero Animation / Success Icon ---
+                  // --- Ikon Sukses ---
                   Container(
                     width: 120, height: 120,
-                    decoration: BoxDecoration(color: primaryFixed, shape: BoxShape.circle, boxShadow: [BoxShadow(color: primary.withOpacity(0.2), blurRadius: 40)]),
+                    decoration: BoxDecoration(
+                      color: primaryFixed, 
+                      shape: BoxShape.circle,
+                      boxShadow: [BoxShadow(color: primary.withOpacity(0.2), blurRadius: 40)],
+                    ),
                     child: Center(
                       child: Container(
                         width: 80, height: 80,
@@ -53,52 +61,72 @@ class SuccessScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 32),
                   
-                  Text("Check-In Successful", style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700, color: onSurface, letterSpacing: -0.5)),
+                  Text(
+                    "Check-In Successful", 
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: onSurface, letterSpacing: -0.5)
+                  ),
                   const SizedBox(height: 8),
-                  Text("Your attendance has been securely recorded.", style: TextStyle(fontSize: 16, color: onSurfaceVariant)),
+                  Text(
+                    "Your attendance has been recorded.", 
+                    style: TextStyle(fontSize: 16, color: onSurfaceVariant)
+                  ),
                   const SizedBox(height: 24),
 
-                  // Face Verified Badge
+                  // Badge Wajah Terverifikasi
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(color: surfaceContainerHighest.withOpacity(0.5), borderRadius: BorderRadius.circular(100), border: Border.all(color: outlineVariant.withOpacity(0.3))),
+                    decoration: BoxDecoration(
+                      color: surfaceContainerHighest.withOpacity(0.5), 
+                      borderRadius: BorderRadius.circular(100),
+                      border: Border.all(color: outlineVariant.withOpacity(0.3))
+                    ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.verified_user, color: primary, size: 16),
                         const SizedBox(width: 8),
-                        const Text("FACE VERIFIED", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                        Text(
+                          "FACE VERIFIED", 
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: primary, letterSpacing: 1.0)
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 40),
 
-                  // --- Summary Card ---
+                  // --- Ringkasan Sesi ---
                   Container(
                     width: double.infinity,
                     decoration: BoxDecoration(
-                      color: surfaceContainerLowest, borderRadius: BorderRadius.circular(24),
+                      color: surfaceContainerLowest, 
+                      borderRadius: BorderRadius.circular(24),
                       border: Border.all(color: outlineVariant.withOpacity(0.3)),
                       boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Decorative Top Gradient Line
-                        Container(height: 4, decoration: BoxDecoration(gradient: LinearGradient(colors: [primaryContainer, primary]), borderRadius: const BorderRadius.vertical(top: Radius.circular(24)))),
+                        // Garis gradien pemanis di atas kartu
+                        Container(
+                          height: 6, 
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: [primaryContainer, primary]),
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(24))
+                          )
+                        ),
                         Padding(
                           padding: const EdgeInsets.all(24),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text("Session Details", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: onSurface)),
-                              const Divider(height: 24),
+                              Text("Session Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: onSurface)),
+                              const SizedBox(height: 20),
                               
-                              _buildDetailRow(icon: Icons.schedule, title: "Time", value: "08:45 AM", subValue: "Oct 24, 2023"),
-                              const SizedBox(height: 16),
-                              _buildDetailRow(icon: Icons.location_on, title: "Location", value: "Main Office HQ"),
-                              const SizedBox(height: 16),
-                              _buildDetailRow(icon: Icons.work, title: "Status", value: "On Time", isStatus: true),
+                              _buildDetailRow(icon: Icons.schedule, title: "Time", value: "08:45 AM", subValue: "Today"),
+                              const SizedBox(height: 20),
+                              _buildDetailRow(icon: Icons.location_on_outlined, title: "Location", value: "Main Office HQ"),
+                              const SizedBox(height: 20),
+                              _buildDetailRow(icon: Icons.work_outline, title: "Status", value: "On Time", isStatus: true),
                             ],
                           ),
                         ),
@@ -107,20 +135,28 @@ class SuccessScreen extends StatelessWidget {
                   ),
                   const Spacer(),
 
-                  // --- Primary Action Button (Done) ---
+                  // --- TOMBOL DONE (Logika Baru) ---
                   SizedBox(
-                    width: double.infinity, height: 56,
+                    width: double.infinity, 
+                    height: 56,
                     child: ElevatedButton(
                       onPressed: () {
-                      // Kembali ke layar awal (Home) dan buang semua tumpukan layar sebelumnya (GPS, Wajah)
-                      Navigator.popUntil(context, (route) => route.isFirst);
-                    },
+                        // LOGIKA BARU: Hapus semua layar dan paksa balik ke MainScreen (Home)
+                        Navigator.of(context).pushAndRemoveUntil(
+                          MaterialPageRoute(builder: (context) => const MainScreen()),
+                          (route) => false, // Menghapus semua history navigasi sebelumnya
+                        );
+                      },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: primary,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        elevation: 4, shadowColor: primary.withOpacity(0.5),
+                        elevation: 4,
+                        shadowColor: primary.withOpacity(0.4),
                       ),
-                      child: const Text("Done", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+                      child: const Text(
+                        "Done", 
+                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)
+                      ),
                     ),
                   ),
                 ],
@@ -132,27 +168,26 @@ class SuccessScreen extends StatelessWidget {
     );
   }
 
-  // Widget Helper untuk baris detail card
   Widget _buildDetailRow({required IconData icon, required String title, required String value, String? subValue, bool isStatus = false}) {
     return Row(
       children: [
         Container(
-          width: 40, height: 40,
+          width: 44, height: 44,
           decoration: BoxDecoration(color: surfaceContainerLow, shape: BoxShape.circle),
-          child: Icon(icon, color: primary, size: 20),
+          child: Icon(icon, color: primary, size: 22),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 14),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: onSurfaceVariant, letterSpacing: 0.5)),
+              Text(title.toUpperCase(), style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: onSurfaceVariant, letterSpacing: 0.5)),
               const SizedBox(height: 2),
               if (isStatus)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(color: secondaryContainer, borderRadius: BorderRadius.circular(100)),
-                  child: Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: onSecondaryContainer)),
+                  child: Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: onSecondaryContainer)),
                 )
               else
                 Text(value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: onSurface)),
@@ -160,14 +195,7 @@ class SuccessScreen extends StatelessWidget {
           ),
         ),
         if (subValue != null)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text("DATE", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: onSurfaceVariant, letterSpacing: 0.5)),
-              const SizedBox(height: 2),
-              Text(subValue, style: TextStyle(fontSize: 14, color: onSurface)),
-            ],
-          ),
+          Text(subValue, style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
       ],
     );
   }
