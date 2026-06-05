@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; // TAMBAHAN: Import Supabase
 import 'gps_screen.dart'; 
 
 class AttendanceScreen extends StatefulWidget {
@@ -37,6 +38,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   final Color primary = const Color(0xFF005BBF);
   final Color outlineVariant = const Color(0xFFC1C6D6);
 
+  // TAMBAHAN: State untuk data profil di AppBar
+  String _displayName = 'Zdanov';
+  String _avatarUrl = '';
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +51,26 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     )..repeat(reverse: true);
     
     _initCameraAndML();
+    _fetchAvatarData(); // TAMBAHAN: Panggil fungsi fetch data
+  }
+
+  // TAMBAHAN: Fungsi untuk narik foto dari tabel profiles
+  Future<void> _fetchAvatarData() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('profiles')
+          .select('display_name, avatar_url')
+          .limit(1)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _displayName = response['display_name'] ?? 'Zdanov';
+          _avatarUrl = response['avatar_url']?.toString() ?? '';
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _initCameraAndML() async {
@@ -165,6 +190,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       ),
     );
   }
+
   @override
   void dispose() {
     _cameraController?.stopImageStream();
@@ -209,7 +235,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         scrolledUnderElevation: 0,
         title: Row(
           children: [
-            const CircleAvatar(radius: 16, backgroundImage: NetworkImage("https://ui-avatars.com/api/?name=Alex&background=random")), // Nanti ini ditarik dari profile Supabase
+            // TAMBAHAN: CircleAvatar logic diubah biar ngikutin database
+            CircleAvatar(
+              radius: 16,
+              backgroundImage: _avatarUrl.isNotEmpty
+                  ? NetworkImage(_avatarUrl)
+                  : NetworkImage("https://ui-avatars.com/api/?name=$_displayName&background=random"),
+            ),
             const SizedBox(width: 12),
             Text("FaceAttend", style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 20)),
           ],
