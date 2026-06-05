@@ -9,8 +9,8 @@ Future<void> main() async {
 
   // Ini dia jembatan koneksinya!
   await Supabase.initialize(
-    url: 'https://cbnnlmtguowjcwlprkcp.supabase.co/rest/v1/',     // <--- ISI DENGAN PROJECT URL SUPABASE-MU
-    anonKey: 'sb_publishable_EJMjq3nAiTaMDqo6xizzrA_JI18L9M6',  // <--- ISI DENGAN ANON KEY SUPABASE-MU
+    url: 'https://cbnnlmtguowjcwlprkcp.supabase.co',     // <--- ISI DENGAN PROJECT URL SUPABASE-MU
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNibm5sbXRndW93amN3bHBya2NwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MjY1OTQsImV4cCI6MjA5NjIwMjU5NH0.7hI_8KF8c1wrPIftifuj1Q9npZK9JQpwSDarv32nWW8',  // <--- ISI DENGAN ANON KEY SUPABASE-MU
   );
 
   runApp(const MyApp());

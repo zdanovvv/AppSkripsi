@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'attendance_screen.dart'; // Import Halaman Face Recognition Anda
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
 
-  // Warna Material 3 dari HTML kamu
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  // Warna Material 3
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerLowest = const Color(0xFFFFFFFF);
   final Color surfaceContainerLow = const Color(0xFFF3F4F5);
@@ -18,11 +25,35 @@ class HomeScreen extends StatelessWidget {
   final Color onTertiaryFixed = const Color(0xFF001945);
   final Color outlineVariant = const Color(0xFFC1C6D6);
 
+  String _displayName = 'Zdanov';
+  String _avatarUrl = ''; // TAMBAHAN: Variabel buat nampung link foto
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchHomeData();
+  }
+
+  Future<void> _fetchHomeData() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('profiles')
+          .select('display_name, avatar_url') // TAMBAHAN: Minta database ngasih avatar_url juga
+          .limit(1)
+          .single();
+
+      setState(() {
+        _displayName = response['display_name'] ?? 'Zdanov';
+        _avatarUrl = response['avatar_url']?.toString() ?? ''; // TAMBAHAN: Simpan link foto
+      });
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: surface,
-      // --- Top App Bar ---
       appBar: AppBar(
         backgroundColor: surfaceContainerLowest,
         elevation: 0,
@@ -31,7 +62,10 @@ class HomeScreen extends StatelessWidget {
           children: [
             CircleAvatar(
               radius: 16,
-              backgroundImage: const NetworkImage("https://ui-avatars.com/api/?name=Alex&background=random"),
+              // LOGIKA FOTO: Kalau _avatarUrl ada isinya, pakai foto itu. Kalau kosong, pakai ZD.
+              backgroundImage: _avatarUrl.isNotEmpty
+                  ? NetworkImage(_avatarUrl)
+                  : NetworkImage("https://ui-avatars.com/api/?name=$_displayName&background=random"),
             ),
             const SizedBox(width: 12),
             Text("FaceAttend", style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 20)),
@@ -44,14 +78,12 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
-      // --- Body Content ---
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. Greeting Section
-            Text("Good Morning, Alex!", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
+            Text("Good Morning, $_displayName!", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -62,7 +94,6 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 32),
 
-            // 2. Status & System Checks
             Row(
               children: [
                 Expanded(
@@ -88,7 +119,7 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 32),
 
-            // 3. Primary Action Area (Biometric Scan)
+            // Primary Action Area (Biometric Scan)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
@@ -105,26 +136,33 @@ class HomeScreen extends StatelessWidget {
                   Text("Ensure your face is clearly visible", style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
                   const SizedBox(height: 24),
                   
-                  // Biometric Ring
-                  Container(
-                    width: 128,
-                    height: 128,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: primary, width: 3),
-                      color: Colors.white,
-                      boxShadow: [BoxShadow(color: primary.withOpacity(0.15), blurRadius: 20)],
+                  // Biometric Ring yang bisa di-tap langsung ke Scan Muka
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (context) => const AttendanceScreen()));
+                    },
+                    child: Container(
+                      width: 128,
+                      height: 128,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: primary, width: 3),
+                        color: Colors.white,
+                        boxShadow: [BoxShadow(color: primary.withOpacity(0.15), blurRadius: 20)],
+                      ),
+                      child: Icon(Icons.face_unlock_outlined, size: 48, color: primary),
                     ),
-                    child: Icon(Icons.face_unlock_outlined, size: 48, color: primary),
                   ),
                   const SizedBox(height: 32),
 
-                  // Buttons
                   Row(
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: () {},
+                          onPressed: () {
+                            // NAVIGASI LANGSUNG KE HALAMAN FACE RECOGNITION
+                            Navigator.push(context, MaterialPageRoute(builder: (context) => const AttendanceScreen()));
+                          },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: primary,
                             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -155,7 +193,7 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 32),
 
-            // 4. Weekly Summary
+            // Weekly Summary
             Text("Weekly Summary", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: onSurface)),
             const SizedBox(height: 16),
             Container(
@@ -194,7 +232,6 @@ class HomeScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   
-                  // Simple Bar Chart
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -209,7 +246,7 @@ class HomeScreen extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(height: 40), // Spacer biar gak ketutup bottom nav
+            const SizedBox(height: 40),
           ],
         ),
       ),
@@ -245,7 +282,7 @@ class HomeScreen extends StatelessWidget {
       children: [
         Container(
           width: 32,
-          height: 80, // Max height
+          height: 80,
           alignment: Alignment.bottomCenter,
           child: Container(
             width: double.infinity,
