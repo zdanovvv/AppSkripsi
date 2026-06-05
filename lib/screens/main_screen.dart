@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'attendance_screen.dart'; // Pastikan file ini sudah ada
+import 'history_screen.dart';
+import 'notifications_screen.dart';
+import 'profile_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({Key? key}) : super(key: key);
@@ -16,9 +19,9 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _screens = [
     const HomeScreen(),
     const AttendanceScreen(), // <-- Layar absen wajah ditaruh di sini
-    const Center(child: Text("History Screen Placeholder", style: TextStyle(color: Colors.black))),
-    const Center(child: Text("Notifications Screen Placeholder", style: TextStyle(color: Colors.black))),
-    const Center(child: Text("Profile Screen Placeholder", style: TextStyle(color: Colors.black))),
+    const HistoryScreen(),
+    const NotificationsScreen(),
+    const ProfileScreen(),
   ];
 
   // Data Navigasi (Icon non-aktif, Icon aktif, Label)

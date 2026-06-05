@@ -73,6 +73,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       appBar: AppBar(
         backgroundColor: surface,
         elevation: 0,
+        scrolledUnderElevation: 0,
         title: Row(
           children: [
             const CircleAvatar(radius: 16, backgroundImage: NetworkImage("https://ui-avatars.com/api/?name=Alex&background=random")),
