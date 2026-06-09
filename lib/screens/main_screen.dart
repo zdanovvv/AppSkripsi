@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
-import 'attendance_screen.dart'; // Pastikan file ini sudah ada
+import 'attendance_screen.dart'; 
 import 'history_screen.dart';
 import 'notifications_screen.dart';
 import 'profile_screen.dart';
@@ -14,15 +14,9 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-
-  // Daftar halaman yang akan ditampilkan
-  final List<Widget> _screens = [
-    const HomeScreen(),
-    const AttendanceScreen(), // <-- Layar absen wajah ditaruh di sini
-    const HistoryScreen(),
-    const NotificationsScreen(),
-    const ProfileScreen(),
-  ];
+  
+  // STATE BARU: Mengontrol nyala/matinya badge merah di nav bar
+  bool _hasUnreadNotif = true; 
 
   // Data Navigasi (Icon non-aktif, Icon aktif, Label)
   final List<Map<String, dynamic>> _navItemsData = [
@@ -40,11 +34,27 @@ class _MainScreenState extends State<MainScreen> {
     double indicatorDiameter = 56.0; 
     double bottomBarHeight = 76.0; 
 
+    // Daftar layar dipindah ke dalam build agar bisa membaca fungsi state MainScreen
+    final List<Widget> screens = [
+      const HomeScreen(),
+      const AttendanceScreen(), 
+      const HistoryScreen(),
+      // Meneruskan callback ke halaman notifikasi agar bisa mematikan red dot
+      NotificationsScreen(
+        onMarkAllRead: () {
+          setState(() {
+            _hasUnreadNotif = false;
+          });
+        },
+      ),
+      const ProfileScreen(),
+    ];
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA), // Surface color
+      backgroundColor: const Color(0xFFF8F9FA), 
       body: IndexedStack(
         index: _currentIndex,
-        children: _screens,
+        children: screens,
       ),
       bottomNavigationBar: Container(
         height: bottomBarHeight,
@@ -68,7 +78,7 @@ class _MainScreenState extends State<MainScreen> {
                 width: indicatorDiameter, 
                 height: indicatorDiameter,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFD2E6EF), // secondary-container color
+                  color: Color(0xFFD2E6EF), 
                   shape: BoxShape.circle, 
                 ),
               ),
@@ -98,7 +108,8 @@ class _MainScreenState extends State<MainScreen> {
                         activeIconData: _navItemsData[index]["activeIcon"],
                         label: _navItemsData[index]["label"],
                         isActive: _currentIndex == index,
-                        hasBadge: index == 3, 
+                        // Tanda merah hanya muncul di index ke-3 (Notif) JIKA ada pesan belum dibaca
+                        hasBadge: index == 3 ? _hasUnreadNotif : false, 
                         circleDiameter: indicatorDiameter,
                       ),
                     ),
@@ -142,13 +153,8 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300), 
-    );
-    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
-    );
+    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
+    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
     if (widget.isActive) _controller.forward();
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
+import 'package:supabase_flutter/supabase_flutter.dart'; // TAMBAHAN: Import Supabase
 import 'history_detail_screen.dart';
 import 'settings_screen.dart';
 
@@ -13,6 +14,10 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   // Mode View: true = List View, false = Analytics View
   bool _isListView = false; 
+
+  // TAMBAHAN: Variabel untuk menyimpan data profil dari database
+  String _displayName = 'Zdanov';
+  String _avatarUrl = '';
 
   // Tema Warna Material 3 
   final Color surface = const Color(0xFFF8F9FA);
@@ -30,6 +35,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
   final Color outline = const Color(0xFF727785);
   final Color error = const Color(0xFFBA1A1A);
 
+  // TAMBAHAN: Menjalankan fetch saat halaman dibuka
+  @override
+  void initState() {
+    super.initState();
+    _fetchProfileData();
+  }
+
+  // TAMBAHAN: Fungsi narik data avatar dan nama dari Supabase
+  Future<void> _fetchProfileData() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final response = await supabase
+          .from('profiles')
+          .select('display_name, avatar_url')
+          .limit(1)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          _displayName = response['display_name'] ?? 'Zdanov';
+          _avatarUrl = response['avatar_url']?.toString() ?? '';
+        });
+      }
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -41,7 +72,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
         shape: Border(bottom: BorderSide(color: outlineVariant.withOpacity(0.3), width: 1)),
         title: Row(
           children: [
-            const CircleAvatar(radius: 16, backgroundImage: NetworkImage("https://ui-avatars.com/api/?name=Zdanov&background=random")),
+            // TAMBAHAN: CircleAvatar logic diubah agar mengambil data dari _avatarUrl
+            CircleAvatar(
+              radius: 16, 
+              backgroundImage: _avatarUrl.isNotEmpty
+                  ? NetworkImage(_avatarUrl)
+                  : NetworkImage("https://ui-avatars.com/api/?name=$_displayName&background=random"),
+            ),
             const SizedBox(width: 12),
             Text("FaceAttend", style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 20)),
           ],

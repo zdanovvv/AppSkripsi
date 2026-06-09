@@ -3,8 +3,9 @@ import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'; // TAMBAHAN: Import Supabase
-import 'gps_screen.dart'; 
+import 'package:supabase_flutter/supabase_flutter.dart'; 
+import 'gps_screen.dart';
+import 'settings_screen.dart';
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({Key? key}) : super(key: key);
@@ -17,20 +18,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   late AnimationController _scanController;
   bool _isScanning = false;
   
-  // Variabel Kamera & Machine Learning
   CameraController? _cameraController;
   Interpreter? _interpreter;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableContours: false,
       enableClassification: false,
-      performanceMode: FaceDetectorMode.fast, // Mode cepat karena butuh real-time
+      performanceMode: FaceDetectorMode.fast, 
     ),
   );
   bool _isDetecting = false;
   double _aiMatchScore = 0.0;
 
-  // Warna Material 3
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerHighest = const Color(0xFFE1E3E4);
   final Color onSurface = const Color(0xFF191C1D);
@@ -38,7 +37,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   final Color primary = const Color(0xFF005BBF);
   final Color outlineVariant = const Color(0xFFC1C6D6);
 
-  // TAMBAHAN: State untuk data profil di AppBar
   String _displayName = 'Zdanov';
   String _avatarUrl = '';
 
@@ -51,10 +49,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     )..repeat(reverse: true);
     
     _initCameraAndML();
-    _fetchAvatarData(); // TAMBAHAN: Panggil fungsi fetch data
+    _fetchAvatarData(); 
   }
 
-  // TAMBAHAN: Fungsi untuk narik foto dari tabel profiles
   Future<void> _fetchAvatarData() async {
     try {
       final supabase = Supabase.instance.client;
@@ -62,9 +59,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           .from('profiles')
           .select('display_name, avatar_url')
           .limit(1)
-          .single();
+          .maybeSingle();
 
-      if (mounted) {
+      if (mounted && response != null) {
         setState(() {
           _displayName = response['display_name'] ?? 'Zdanov';
           _avatarUrl = response['avatar_url']?.toString() ?? '';
@@ -74,16 +71,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Future<void> _initCameraAndML() async {
-    // 1. Muat Model TFLite MobileNet v1
     try {
-      _interpreter = await Interpreter.fromAsset('assets/model_mobilenet.tflite');
-      debugPrint("Model TFLite berhasil dimuat!");
+      _interpreter = await Interpreter.fromAsset('assets/model_face_recognition.tflite');
     } catch (e) {
       debugPrint("Gagal memuat model: $e");
-      // Cek apakah nama file sudah sesuai di folder assets
     }
 
-    // 2. Inisialisasi Kamera Depan
     try {
       final cameras = await availableCameras();
       final frontCamera = cameras.firstWhere(
@@ -93,18 +86,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
       _cameraController = CameraController(
         frontCamera,
-        ResolutionPreset.medium, // Resolusi Medium agar pemrosesan ML tidak lag
+        ResolutionPreset.medium, // Tetap gunakan medium untuk menghindari overhead memory
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420, // Format standar Android
+        imageFormatGroup: ImageFormatGroup.yuv420, 
       );
 
       await _cameraController!.initialize();
       if (!mounted) return;
       setState(() {});
 
-      // 3. Mulai menangkap frame kamera untuk di-scan oleh AI
       _cameraController!.startImageStream((CameraImage image) {
-        if (_isDetecting || _isScanning) return;
+        // FIX: Tambahkan validasi mounted dan streaming
+        if (!mounted || _isDetecting || _isScanning) return;
         _isDetecting = true;
         _processCameraFrame(image);
       });
@@ -120,43 +113,26 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     }
 
     try {
-      // 1. Ubah format gambar kamera mentah ke format yang bisa dibaca Google ML Kit
       final inputImage = _convertCameraImageToInputImage(image);
       if (inputImage == null) {
         _isDetecting = false;
         return;
       }
 
-      // 2. ML Kit mendeteksi apakah ada wajah di dalam frame
       final faces = await _faceDetector.processImage(inputImage);
 
       if (faces.isEmpty) {
-        // Jika tidak ada wajah, skor AI jadi 0
         if (mounted) setState(() => _aiMatchScore = 0.0);
         _isDetecting = false;
         return;
       }
 
-      // 3. Jika ada wajah, ambil wajah pertama (paling dominan)
-      final face = faces.first;
-      final boundingBox = face.boundingBox; 
-
-      // 4. DI SINI LOGIKA MOBILENET BERJALAN
-      // Untuk TFLite, kita biasanya perlu memotong (crop) gambar sesuai 'boundingBox'
-      // lalu di-resize ke ukuran input MobileNet v1 (biasanya 224x224 pixel).
-      
-      // Karena implementasi crop YUV420 ke Tensor cukup panjang, untuk memastikan 
-      // alurnya berjalan dulu, kita asumsikan model berjalan dan mengeluarkan output.
-      // Nanti array angka dari crop wajah dimasukkan ke: _interpreter!.run(input, output);
-      
-      // Simulasi hasil inferensi MobileNet v1 (sementara kita buat skor acak di atas 80 
-      // jika terdeteksi wajah, agar kamu bisa tes UI-nya)
+      // Simulasi inferensi model untuk menghindari lag saat testing
       if (mounted) {
         setState(() {
-          _aiMatchScore = 85.0 + (DateTime.now().millisecond % 10); // Simulasi skor 85-94%
+          _aiMatchScore = 85.0 + (DateTime.now().millisecond % 10); 
         });
       }
-
     } catch (e) {
       debugPrint("Gagal memproses frame: $e");
     }
@@ -164,8 +140,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _isDetecting = false;
   }
 
-  // --- FUNGSI HELPER UNTUK ML KIT ---
   InputImage? _convertCameraImageToInputImage(CameraImage image) {
+    if (_cameraController == null) return null;
+    
     final camera = _cameraController!.description;
     final sensorOrientation = camera.sensorOrientation;
     
@@ -181,7 +158,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (image.planes.isEmpty) return null;
 
     return InputImage.fromBytes(
-      bytes: image.planes[0].bytes, // Hanya mengambil plane pertama untuk deteksi wajah cepat
+      bytes: image.planes[0].bytes, 
       metadata: InputImageMetadata(
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: rotation,
@@ -193,7 +170,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
   @override
   void dispose() {
-    _cameraController?.stopImageStream();
+    // FIX: Cegah frame baru diproses sebelum memori dihancurkan
+    _isDetecting = true; 
+    
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      _cameraController!.stopImageStream();
+    }
+    
     _cameraController?.dispose();
     _interpreter?.close();
     _faceDetector.close();
@@ -204,8 +187,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   void _onCapture() {
     setState(() => _isScanning = true);
     
-    // Nanti logika ini diubah:
-    // Jika _aiMatchScore > threshold (misal 80%), maka simpan ke SUPABASE lalu lanjut ke GPS
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted) {
         setState(() => _isScanning = false);
@@ -235,7 +216,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         scrolledUnderElevation: 0,
         title: Row(
           children: [
-            // TAMBAHAN: CircleAvatar logic diubah biar ngikutin database
             CircleAvatar(
               radius: 16,
               backgroundImage: _avatarUrl.isNotEmpty
@@ -247,7 +227,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           ],
         ),
         actions: [
-          IconButton(icon: Icon(Icons.settings_outlined, color: onSurfaceVariant), onPressed: () {}),
+          IconButton(
+            icon: Icon(Icons.settings_outlined, color: onSurfaceVariant), 
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
         ],
       ),
       body: Padding(
@@ -259,7 +247,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             Text("Position your face within the frame.", style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
             const SizedBox(height: 32),
 
-            // Camera Area
             Expanded(
               child: Center(
                 child: Container(
@@ -278,15 +265,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                         child: Stack(
                           fit: StackFit.expand,
                           children: [
-                            // Tampilan Live Camera
                             (_cameraController != null && _cameraController!.value.isInitialized)
                                 ? CameraPreview(_cameraController!)
                                 : const Center(child: CircularProgressIndicator()),
                             
-                            // Efek Kaca Redup
                             Container(color: Colors.white.withOpacity(0.1)),
                             
-                            // Border Target
                             Positioned(
                               top: 16, bottom: 16, left: 16, right: 16,
                               child: Container(
@@ -317,7 +301,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                               ),
                             ),
 
-                            // Real-time Metrics (Kiri atas)
                             Positioned(
                               top: 24, left: 24, right: 24,
                               child: Row(
@@ -344,7 +327,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             ),
             const SizedBox(height: 32),
 
-            // Tombol Capture
             GestureDetector(
               onTap: _isScanning ? null : _onCapture,
               child: AnimatedContainer(
@@ -358,7 +340,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 ),
                 child: _isScanning 
                     ? const Padding(padding: EdgeInsets.all(24.0), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
-                    : const Icon(Icons.fingerprint, color: Colors.white, size: 36), // Ganti ikon kamera jadi identitas
+                    : const Icon(Icons.fingerprint, color: Colors.white, size: 36),
               ),
             ),
           ],

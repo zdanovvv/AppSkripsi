@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'attendance_screen.dart'; // Import Halaman Face Recognition Anda
+import 'attendance_screen.dart'; 
+import 'settings_screen.dart'; 
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -25,8 +26,14 @@ class _HomeScreenState extends State<HomeScreen> {
   final Color onTertiaryFixed = const Color(0xFF001945);
   final Color outlineVariant = const Color(0xFFC1C6D6);
 
+  // State Data Profil
   String _displayName = 'Zdanov';
-  String _avatarUrl = ''; // TAMBAHAN: Variabel buat nampung link foto
+  String _avatarUrl = ''; 
+
+  // State Logika Absensi
+  bool _hasCheckedIn = false;
+  bool _hasCheckedOut = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -37,17 +44,75 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _fetchHomeData() async {
     try {
       final supabase = Supabase.instance.client;
-      final response = await supabase
-          .from('profiles')
-          .select('display_name, avatar_url') // TAMBAHAN: Minta database ngasih avatar_url juga
-          .limit(1)
-          .single();
+      final userId = supabase.auth.currentUser?.id;
 
-      setState(() {
-        _displayName = response['display_name'] ?? 'Zdanov';
-        _avatarUrl = response['avatar_url']?.toString() ?? ''; // TAMBAHAN: Simpan link foto
-      });
-    } catch (_) {}
+      // FIX: Kalau belum login, matikan loading dan pakai data default
+      if (userId == null) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+
+      // 1. Tarik Data Profil
+      final profileResponse = await supabase
+          .from('profiles')
+          .select('display_name, avatar_url')
+          .eq('id', userId)
+          .maybeSingle();
+
+      if (profileResponse != null) {
+        _displayName = profileResponse['display_name'] ?? 'Zdanov';
+        _avatarUrl = profileResponse['avatar_url']?.toString() ?? '';
+      }
+
+      // 2. Tarik Data Absensi Spesifik Hari Ini
+      final today = DateTime.now();
+      final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
+      final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+
+      final attendanceResponse = await supabase
+          .from('attendance')
+          .select()
+          .eq('user_id', userId)
+          .gte('check_in_time', startOfDay)
+          .lte('check_in_time', endOfDay)
+          .maybeSingle();
+
+      if (mounted) {
+        setState(() {
+          if (attendanceResponse != null) {
+            _hasCheckedIn = true;
+            _hasCheckedOut = attendanceResponse['check_out_time'] != null; 
+          }
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      // FIX: Pastikan loading selalu mati meskipun ada error jaringan
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return "Good Morning";
+    if (hour < 17) return "Good Afternoon";
+    return "Good Evening";
+  }
+
+  String _getFormattedDate() {
+    final now = DateTime.now();
+    final months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    final days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    
+    final dayName = days[now.weekday - 1];
+    final monthName = months[now.month - 1];
+    
+    String hour = now.hour > 12 ? (now.hour - 12).toString().padLeft(2, '0') : now.hour.toString().padLeft(2, '0');
+    if (now.hour == 0) hour = "12";
+    String minute = now.minute.toString().padLeft(2, '0');
+    String ampm = now.hour >= 12 ? "PM" : "AM";
+
+    return "$dayName, $monthName ${now.day}, ${now.year} • $hour:$minute $ampm";
   }
 
   @override
@@ -62,7 +127,6 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             CircleAvatar(
               radius: 16,
-              // LOGIKA FOTO: Kalau _avatarUrl ada isinya, pakai foto itu. Kalau kosong, pakai ZD.
               backgroundImage: _avatarUrl.isNotEmpty
                   ? NetworkImage(_avatarUrl)
                   : NetworkImage("https://ui-avatars.com/api/?name=$_displayName&background=random"),
@@ -74,22 +138,26 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.settings_outlined, color: onSurfaceVariant),
-            onPressed: () {},
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
+            },
           ),
         ],
       ),
-      body: SingleChildScrollView(
+      body: _isLoading 
+        ? Center(child: CircularProgressIndicator(color: primary)) 
+        : SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Good Morning, $_displayName!", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
+            Text("${_getGreeting()}, $_displayName!", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
             const SizedBox(height: 8),
             Row(
               children: [
                 Icon(Icons.calendar_today, size: 16, color: primary),
                 const SizedBox(width: 8),
-                Text("Monday, October 23, 2023 • 08:45 AM", style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
+                Text(_getFormattedDate(), style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
               ],
             ),
             const SizedBox(height: 32),
@@ -98,59 +166,57 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Expanded(
                   child: _buildStatusCard(
-                    icon: Icons.location_on, 
-                    iconBg: secondaryContainer, 
-                    iconColor: onSecondaryContainer, 
-                    title: "GPS Status", 
-                    value: "Verified"
+                    icon: Icons.location_on, iconBg: secondaryContainer, iconColor: onSecondaryContainer, 
+                    title: "GPS Status", value: "Verified"
                   ),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: _buildStatusCard(
-                    icon: Icons.face, 
-                    iconBg: tertiaryFixed, 
-                    iconColor: onTertiaryFixed, 
-                    title: "Face ID", 
-                    value: "Ready"
+                    icon: Icons.face, iconBg: tertiaryFixed, iconColor: onTertiaryFixed, 
+                    title: "Face ID", value: "Ready"
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 32),
 
-            // Primary Action Area (Biometric Scan)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(24),
+                color: surfaceContainerLowest, borderRadius: BorderRadius.circular(24),
                 border: Border.all(color: outlineVariant.withOpacity(0.5)),
                 boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))],
               ),
               child: Column(
                 children: [
-                  Text("Ready for Check-in", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: onSurface)),
+                  Text(
+                    _hasCheckedOut ? "Attendance Complete" 
+                    : _hasCheckedIn ? "Ready for Check-out" 
+                    : "Ready for Check-in", 
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: onSurface)
+                  ),
                   const SizedBox(height: 4),
                   Text("Ensure your face is clearly visible", style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
                   const SizedBox(height: 24),
                   
-                  // Biometric Ring yang bisa di-tap langsung ke Scan Muka
                   GestureDetector(
-                    onTap: () {
+                    onTap: _hasCheckedOut ? null : () {
                       Navigator.push(context, MaterialPageRoute(builder: (context) => const AttendanceScreen()));
                     },
                     child: Container(
-                      width: 128,
-                      height: 128,
+                      width: 128, height: 128,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: primary, width: 3),
+                        border: Border.all(color: _hasCheckedOut ? outlineVariant : primary, width: 3),
                         color: Colors.white,
-                        boxShadow: [BoxShadow(color: primary.withOpacity(0.15), blurRadius: 20)],
+                        boxShadow: _hasCheckedOut ? [] : [BoxShadow(color: primary.withOpacity(0.15), blurRadius: 20)],
                       ),
-                      child: Icon(Icons.face_unlock_outlined, size: 48, color: primary),
+                      child: Icon(
+                        _hasCheckedOut ? Icons.check_circle : Icons.face_unlock_outlined, 
+                        size: 48, color: _hasCheckedOut ? Colors.green : primary
+                      ),
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -159,31 +225,35 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: () {
-                            // NAVIGASI LANGSUNG KE HALAMAN FACE RECOGNITION
+                          onPressed: _hasCheckedIn ? null : () {
                             Navigator.push(context, MaterialPageRoute(builder: (context) => const AttendanceScreen()));
                           },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: primary,
+                            backgroundColor: _hasCheckedIn ? surfaceContainerLow : primary,
+                            foregroundColor: _hasCheckedIn ? outlineVariant : Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            elevation: _hasCheckedIn ? 0 : 2,
                           ),
-                          icon: const Icon(Icons.login, color: Colors.white, size: 20),
-                          label: const Text("Check-in", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500)),
+                          icon: const Icon(Icons.login, size: 20),
+                          label: const Text("Check-in", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
                         ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: (!_hasCheckedIn || _hasCheckedOut) ? null : () {
+                            Navigator.push(context, MaterialPageRoute(builder: (context) => const AttendanceScreen()));
+                          },
                           style: OutlinedButton.styleFrom(
-                            backgroundColor: surfaceContainer,
-                            side: BorderSide(color: outlineVariant.withOpacity(0.5)),
+                            backgroundColor: (!_hasCheckedIn || _hasCheckedOut) ? surfaceContainerLow : surfaceContainerLowest,
+                            side: BorderSide(color: (!_hasCheckedIn || _hasCheckedOut) ? outlineVariant.withOpacity(0.3) : primary),
+                            foregroundColor: (!_hasCheckedIn || _hasCheckedOut) ? outlineVariant : primary,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
-                          icon: Icon(Icons.logout, color: onSurface, size: 20),
-                          label: Text("Check-out", style: TextStyle(color: onSurface, fontSize: 16, fontWeight: FontWeight.w500)),
+                          icon: const Icon(Icons.logout, size: 20),
+                          label: const Text("Check-out", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
                         ),
                       ),
                     ],
@@ -193,14 +263,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 32),
 
-            // Weekly Summary
             Text("Weekly Summary", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: onSurface)),
             const SizedBox(height: 16),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: surfaceContainerLowest,
-                borderRadius: BorderRadius.circular(16),
+                color: surfaceContainerLowest, borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: outlineVariant.withOpacity(0.5)),
               ),
               child: Column(
@@ -231,15 +299,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                   const SizedBox(height: 24),
-                  
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      _buildBar("M", 80, true),
-                      _buildBar("T", 85, true),
-                      _buildBar("W", 40, true),
-                      _buildBar("T", 0, false),
+                      _buildBar("M", 80, true), _buildBar("T", 85, true),
+                      _buildBar("W", 40, true), _buildBar("T", 0, false),
                       _buildBar("F", 0, false),
                     ],
                   ),
@@ -257,15 +322,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(16),
+        color: surfaceContainerLowest, borderRadius: BorderRadius.circular(16),
         border: Border.all(color: outlineVariant.withOpacity(0.5)),
       ),
       child: Column(
         children: [
           Container(
-            width: 40, height: 40,
-            decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
+            width: 40, height: 40, decoration: BoxDecoration(color: iconBg, shape: BoxShape.circle),
             child: Icon(icon, color: iconColor, size: 20),
           ),
           const SizedBox(height: 8),
@@ -281,12 +344,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Column(
       children: [
         Container(
-          width: 32,
-          height: 80,
-          alignment: Alignment.bottomCenter,
+          width: 32, height: 80, alignment: Alignment.bottomCenter,
           child: Container(
-            width: double.infinity,
-            height: 80 * (heightPercent / 100),
+            width: double.infinity, height: 80 * (heightPercent / 100),
             decoration: BoxDecoration(
               color: isActive ? primaryContainer : const Color(0xFFE1E3E4),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
