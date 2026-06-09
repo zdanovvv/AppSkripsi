@@ -126,8 +126,10 @@ class SuccessScreen extends StatelessWidget {
                     width: double.infinity, height: 56,
                     child: ElevatedButton(
                       onPressed: () {
-                        // Kembali ke layar utama halaman paling depan (Layar Utama Tab Index 0)
-                        Navigator.of(context).popUntil((route) => route.isFirst);
+                        Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (context) => const MainScreen()),
+                        (route) => false,
+                      );
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: primary,

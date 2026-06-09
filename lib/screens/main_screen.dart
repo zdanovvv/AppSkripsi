@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'home_screen.dart';
-import 'attendance_screen.dart'; 
+import 'attendance_screen.dart';
 import 'history_screen.dart';
 import 'notifications_screen.dart';
 import 'profile_screen.dart';
@@ -14,7 +14,10 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-  bool _hasUnreadNotif = true; 
+  final GlobalKey<HomeScreenState> _homeKey = GlobalKey<HomeScreenState>();
+  final ValueNotifier<bool> _attendanceActive = ValueNotifier(false);
+  bool _hasUnreadNotif = true;
+  late List<Widget> _screens;
 
   final List<Map<String, dynamic>> _navItemsData = [
     {"icon": Icons.home_outlined, "activeIcon": Icons.home, "label": "Home"},
@@ -25,39 +28,43 @@ class _MainScreenState extends State<MainScreen> {
   ];
 
   @override
-  Widget build(BuildContext context) {
-    double totalWidth = MediaQuery.of(context).size.width;
-    double navItemWidth = totalWidth / _navItemsData.length;
-    double indicatorDiameter = 56.0; 
-    double bottomBarHeight = 76.0; 
-
-    // DAFTAR LAYAR DENGAN JEMBATAN NAVIGASI
-    final List<Widget> screens = [
+  void initState() {
+    super.initState();
+    _screens = [
       HomeScreen(
-        // Jembatan: Kalau tombol di Home dipencet, otomatis pindah ke Tab Attend
+        key: _homeKey,
         onSwitchToAttend: () {
-          setState(() {
-            _currentIndex = 1;
-          });
+          _attendanceActive.value = true;
+          setState(() => _currentIndex = 1);
         },
       ),
-      AttendanceScreen(isActive: _currentIndex == 1), 
+      _ActiveAttendanceScreen(activeNotifier: _attendanceActive),
       const HistoryScreen(),
       NotificationsScreen(
-        onMarkAllRead: () {
-          setState(() {
-            _hasUnreadNotif = false;
-          });
-        },
+        onMarkAllRead: () => setState(() => _hasUnreadNotif = false),
       ),
       const ProfileScreen(),
     ];
+  }
+
+  @override
+  void dispose() {
+    _attendanceActive.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    double totalWidth = MediaQuery.of(context).size.width;
+    double navItemWidth = totalWidth / _navItemsData.length;
+    double indicatorDiameter = 56.0;
+    double bottomBarHeight = 76.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA), 
+      backgroundColor: const Color(0xFFF8F9FA),
       body: IndexedStack(
         index: _currentIndex,
-        children: screens,
+        children: _screens,
       ),
       bottomNavigationBar: Container(
         height: bottomBarHeight,
@@ -72,16 +79,16 @@ class _MainScreenState extends State<MainScreen> {
           alignment: Alignment.center,
           children: [
             AnimatedPositioned(
-              duration: const Duration(milliseconds: 350), 
+              duration: const Duration(milliseconds: 350),
               curve: Curves.easeOutQuart,
               left: (navItemWidth * _currentIndex) + (navItemWidth / 2) - (indicatorDiameter / 2),
               top: (bottomBarHeight - indicatorDiameter) / 2 - 4,
               child: Container(
-                width: indicatorDiameter, 
+                width: indicatorDiameter,
                 height: indicatorDiameter,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFD2E6EF), 
-                  shape: BoxShape.circle, 
+                  color: Color(0xFFD2E6EF),
+                  shape: BoxShape.circle,
                 ),
               ),
             ),
@@ -93,22 +100,22 @@ class _MainScreenState extends State<MainScreen> {
                   return GestureDetector(
                     onTap: () {
                       if (_currentIndex != index) {
-                        setState(() {
-                          _currentIndex = index;
-                        });
+                        if (index == 0) _homeKey.currentState?.refresh();
+                        _attendanceActive.value = (index == 1);
+                        setState(() => _currentIndex = index);
                       }
                     },
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       width: navItemWidth,
-                      color: Colors.transparent, 
+                      color: Colors.transparent,
                       alignment: Alignment.center,
                       child: StatefulNavItem(
                         iconData: _navItemsData[index]["icon"],
                         activeIconData: _navItemsData[index]["activeIcon"],
                         label: _navItemsData[index]["label"],
                         isActive: _currentIndex == index,
-                        hasBadge: index == 3 ? _hasUnreadNotif : false, 
+                        hasBadge: index == 3 ? _hasUnreadNotif : false,
                         circleDiameter: indicatorDiameter,
                       ),
                     ),
@@ -120,6 +127,40 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
     );
+  }
+}
+
+class _ActiveAttendanceScreen extends StatefulWidget {
+  final ValueNotifier<bool> activeNotifier;
+  const _ActiveAttendanceScreen({Key? key, required this.activeNotifier}) : super(key: key);
+
+  @override
+  State<_ActiveAttendanceScreen> createState() => _ActiveAttendanceScreenState();
+}
+
+class _ActiveAttendanceScreenState extends State<_ActiveAttendanceScreen> {
+  bool _isActive = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isActive = widget.activeNotifier.value;
+    widget.activeNotifier.addListener(_onActiveChanged);
+  }
+
+  void _onActiveChanged() {
+    setState(() => _isActive = widget.activeNotifier.value);
+  }
+
+  @override
+  void dispose() {
+    widget.activeNotifier.removeListener(_onActiveChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AttendanceScreen(isActive: _isActive);
   }
 }
 
@@ -152,8 +193,13 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
-    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
+    );
     if (widget.isActive) _controller.forward();
   }
 
@@ -162,9 +208,9 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
     super.didUpdateWidget(oldWidget);
     if (widget.isActive != oldWidget.isActive) {
       if (widget.isActive) {
-        _controller.forward(); 
+        _controller.forward();
       } else {
-        _controller.reverse(); 
+        _controller.reverse();
       }
     }
   }
@@ -177,8 +223,8 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    Color activeColor = const Color(0xFF55676F); 
-    Color inactiveColor = const Color(0xFF414754); 
+    const Color activeColor = Color(0xFF55676F);
+    const Color inactiveColor = Color(0xFF414754);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -196,14 +242,19 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
                   Icon(
                     widget.isActive ? widget.activeIconData : widget.iconData,
                     color: widget.isActive ? activeColor : inactiveColor,
-                    size: widget.isActive ? 26 : 24, 
+                    size: widget.isActive ? 26 : 24,
                   ),
                   if (widget.hasBadge)
                     Positioned(
-                      right: -2, top: -2,
+                      right: -2,
+                      top: -2,
                       child: Container(
-                        width: 8, height: 8,
-                        decoration: const BoxDecoration(color: Color(0xFFBA1A1A), shape: BoxShape.circle),
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFBA1A1A),
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
                 ],
@@ -213,7 +264,7 @@ class _StatefulNavItemState extends State<StatefulNavItem> with SingleTickerProv
         ),
         AnimatedOpacity(
           duration: const Duration(milliseconds: 200),
-          opacity: widget.isActive ? 1.0 : 0.7, 
+          opacity: widget.isActive ? 1.0 : 0.7,
           child: Text(
             widget.label,
             style: TextStyle(

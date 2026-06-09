@@ -8,10 +8,11 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key, this.onSwitchToAttend}) : super(key: key);
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class HomeScreenState extends State<HomeScreen> {
+  void refresh() => _fetchHomeData();
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerLowest = const Color(0xFFFFFFFF);
   final Color surfaceContainerLow = const Color(0xFFF3F4F5);

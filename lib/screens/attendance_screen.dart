@@ -49,18 +49,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   String _avatarUrl = '';
 
   @override
-  void initState() {
-    super.initState();
-    _scanController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
-    
-    _fetchUserData(); 
-    if (widget.isActive) {
-      _initCameraAndML();
-    }
+void initState() {
+  super.initState();
+  _scanController = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  )..repeat(reverse: true);
+  
+  _fetchUserData();
+  if (widget.isActive) {
+    _initCameraAndML();
   }
+}
 
   @override
   void didUpdateWidget(covariant AttendanceScreen oldWidget) {
@@ -228,54 +228,66 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     );
   }
 
-  @override
-  void dispose() {
-    _stopCamera();
-    _faceDetector.close();
-    _interpreter?.close();
-    _scanController.dispose();
-    super.dispose();
-  }
+@override
+void dispose() {
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
+    try {
+      if (_cameraController != null) {
+        if (_cameraController!.value.isStreamingImages) {
+          await _cameraController!.stopImageStream();
+        }
+        await _cameraController!.dispose();
+      }
+    } catch (_) {}
+  });
+  _faceDetector.close();
+  _interpreter?.close();
+  _scanController.dispose();
+  super.dispose();
+}
 
   // LOGIKA AMAN TOMBOL JEP RET MANUAL
   // LOGIKA AMAN TOMBOL JEP RET MANUAL (ANTI FREEZE)
   void _onCapture() async {
-    if (!_isFaceDetected) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Wajah belum terdeteksi di dalam frame kamera!"), backgroundColor: Colors.red),
-      );
-      return;
-    }
-
-    if (!_isScoreLocked) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Mohon posisi wajah distabilkan sebentar untuk pemindaian biometrik..."), backgroundColor: Colors.orange),
-      );
-      return;
-    }
-
-    setState(() => _isScanning = true);
-    
-    // Tunggu animasi muter sebentar
-    await Future.delayed(const Duration(milliseconds: 1000));
-    
-    if (mounted) {
-      setState(() => _isScanning = false);
-      
-      // FIX CRASH: MATIKAN KAMERA SECARA TOTAL SEBELUM BUKA GPS
-      await _stopCamera();
-
-      // Pindah ke layar GPS, tunggu sampai layarnya ditutup/kembali
-      await Navigator.of(context).push(
-        MaterialPageRoute(builder: (context) => GPSScreen(aiScore: _aiMatchScore)),
-      );
-
-      // JIKA USER MENEKAN 'BACK' DARI LAYAR GPS, NYALAKAN LAGI KAMERANYA
-      if (mounted && widget.isActive) {
-        _initCameraAndML();
-      }
-    }
+  if (!_isFaceDetected) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Wajah belum terdeteksi!"), backgroundColor: Colors.red),
+    );
+    return;
   }
+
+  if (!_isScoreLocked) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Mohon stabilkan wajah sebentar..."), backgroundColor: Colors.orange),
+    );
+    return;
+  }
+
+  setState(() => _isScanning = true);
+
+  // Stop image stream dulu, tanpa dispose
+  try {
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      await _cameraController!.stopImageStream();
+    }
+  } catch (_) {}
+
+  await Future.delayed(const Duration(milliseconds: 500));
+
+  if (!mounted) return;
+  setState(() => _isScanning = false);
+
+  // Baru navigate
+  await Navigator.of(context).push(
+    MaterialPageRoute(builder: (context) => GPSScreen(aiScore: _aiMatchScore)),
+  );
+
+  // Balik dari GPS, nyalakan kamera lagi
+  if (mounted && widget.isActive) {
+    _initCameraAndML();
+  }
+}
+
   // LOGIKA TEXT DUA KONDISI SESUAI PERMINTAAN KAMU
   Widget _buildDynamicInstructionText() {
     if (!_isFaceDetected) {
