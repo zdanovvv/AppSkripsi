@@ -14,11 +14,8 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
-  
-  // STATE BARU: Mengontrol nyala/matinya badge merah di nav bar
   bool _hasUnreadNotif = true; 
 
-  // Data Navigasi (Icon non-aktif, Icon aktif, Label)
   final List<Map<String, dynamic>> _navItemsData = [
     {"icon": Icons.home_outlined, "activeIcon": Icons.home, "label": "Home"},
     {"icon": Icons.fingerprint_outlined, "activeIcon": Icons.fingerprint, "label": "Attend"},
@@ -34,12 +31,18 @@ class _MainScreenState extends State<MainScreen> {
     double indicatorDiameter = 56.0; 
     double bottomBarHeight = 76.0; 
 
-    // Daftar layar dipindah ke dalam build agar bisa membaca fungsi state MainScreen
+    // DAFTAR LAYAR DENGAN JEMBATAN NAVIGASI
     final List<Widget> screens = [
-      const HomeScreen(),
-      const AttendanceScreen(), 
+      HomeScreen(
+        // Jembatan: Kalau tombol di Home dipencet, otomatis pindah ke Tab Attend
+        onSwitchToAttend: () {
+          setState(() {
+            _currentIndex = 1;
+          });
+        },
+      ),
+      AttendanceScreen(isActive: _currentIndex == 1), 
       const HistoryScreen(),
-      // Meneruskan callback ke halaman notifikasi agar bisa mematikan red dot
       NotificationsScreen(
         onMarkAllRead: () {
           setState(() {
@@ -68,7 +71,6 @@ class _MainScreenState extends State<MainScreen> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // --- CIRCULAR MOVING INDICATOR ---
             AnimatedPositioned(
               duration: const Duration(milliseconds: 350), 
               curve: Curves.easeOutQuart,
@@ -83,8 +85,6 @@ class _MainScreenState extends State<MainScreen> {
                 ),
               ),
             ),
-
-            // --- NAV ITEMS ---
             Positioned.fill(
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -108,7 +108,6 @@ class _MainScreenState extends State<MainScreen> {
                         activeIconData: _navItemsData[index]["activeIcon"],
                         label: _navItemsData[index]["label"],
                         isActive: _currentIndex == index,
-                        // Tanda merah hanya muncul di index ke-3 (Notif) JIKA ada pesan belum dibaca
                         hasBadge: index == 3 ? _hasUnreadNotif : false, 
                         circleDiameter: indicatorDiameter,
                       ),

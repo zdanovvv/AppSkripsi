@@ -1,10 +1,20 @@
 import 'package:flutter/material.dart';
-import 'main_screen.dart'; // WAJIB IMPORT INI
+import 'main_screen.dart'; 
 
 class SuccessScreen extends StatelessWidget {
-  const SuccessScreen({Key? key}) : super(key: key);
+  // Parameter dinamis yang dikirim dari GPS Screen
+  final String attendanceTime;
+  final String attendanceLocation;
+  final String attendanceStatus;
 
-  // Warna Material 3 sesuai desain kamu
+  const SuccessScreen({
+    Key? key,
+    required this.attendanceTime,
+    required this.attendanceLocation,
+    required this.attendanceStatus,
+  }) : super(key: key);
+
+  // Warna Material 3 sesuai dengan desain asli kamu
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerLowest = const Color(0xFFFFFFFF);
   final Color surfaceContainerLow = const Color(0xFFF3F4F5);
@@ -20,143 +30,112 @@ class SuccessScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Logika warna dinamis untuk status keterlambatan agar bento card kamu makin hidup
+    final Color currentStatusBg = attendanceStatus == "Telat" ? const Color(0xFFFFDAD6) : const Color(0xFFD1E7DD);
+    final Color currentStatusText = attendanceStatus == "Telat" ? const Color(0xFFBA1A1A) : const Color(0xFF0F5132);
+
     return Scaffold(
       backgroundColor: surface,
       body: Stack(
         children: [
-          // Efek bulatan blur di background agar estetik
+          // Efek bulatan blur di background agar estetik (Bawaan Asli Kamu)
           Positioned(
             top: -100, left: -100,
             child: Container(
               width: 300, height: 300,
               decoration: BoxDecoration(
-                color: primaryContainer.withOpacity(0.1),
+                color: primary.withOpacity(0.05),
                 shape: BoxShape.circle,
               ),
             ),
           ),
-          
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
               child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const Spacer(),
-
-                  // --- Ikon Sukses ---
-                  Container(
-                    width: 120, height: 120,
-                    decoration: BoxDecoration(
-                      color: primaryFixed, 
-                      shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: primary.withOpacity(0.2), blurRadius: 40)],
-                    ),
-                    child: Center(
-                      child: Container(
-                        width: 80, height: 80,
-                        decoration: BoxDecoration(color: primary, shape: BoxShape.circle),
-                        child: const Icon(Icons.check_circle, color: Colors.white, size: 56),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 32),
                   
+                  // Bulatan Centang Sukses (Bawaan Asli Kamu)
+                  Container(
+                    width: 96, height: 96,
+                    decoration: BoxDecoration(
+                      color: secondaryContainer,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.check_circle, size: 56, color: primary),
+                  ),
+                  const SizedBox(height: 24),
                   Text(
-                    "Check-In Successful", 
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: onSurface, letterSpacing: -0.5)
+                    "Attendance Success",
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: onSurface),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    "Your attendance has been recorded.", 
-                    style: TextStyle(fontSize: 16, color: onSurfaceVariant)
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Badge Wajah Terverifikasi
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: surfaceContainerHighest.withOpacity(0.5), 
-                      borderRadius: BorderRadius.circular(100),
-                      border: Border.all(color: outlineVariant.withOpacity(0.3))
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.verified_user, color: primary, size: 16),
-                        const SizedBox(width: 8),
-                        Text(
-                          "FACE VERIFIED", 
-                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: primary, letterSpacing: 1.0)
-                        ),
-                      ],
-                    ),
+                    "Data presensi kamu telah berhasil diverifikasi dan disimpan ke sistem.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14, color: onSurfaceVariant),
                   ),
                   const SizedBox(height: 40),
 
-                  // --- Ringkasan Sesi ---
+                  // BENTO CARD DETAIL DATA (Menggunakan struktur baris asli kamu)
                   Container(
-                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: surfaceContainerLowest, 
+                      color: surfaceContainerLowest,
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(color: outlineVariant.withOpacity(0.3)),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10, offset: const Offset(0, 4))],
                     ),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Garis gradien pemanis di atas kartu
-                        Container(
-                          height: 6, 
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [primaryContainer, primary]),
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(24))
-                          )
+                        _buildDetailRow(
+                          icon: Icons.access_time,
+                          title: "Waktu Absen",
+                          value: attendanceTime,
                         ),
-                        Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text("Session Details", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: onSurface)),
-                              const SizedBox(height: 20),
-                              
-                              _buildDetailRow(icon: Icons.schedule, title: "Time", value: "08:45 AM", subValue: "Today"),
-                              const SizedBox(height: 20),
-                              _buildDetailRow(icon: Icons.location_on_outlined, title: "Location", value: "Main Office HQ"),
-                              const SizedBox(height: 20),
-                              _buildDetailRow(icon: Icons.work_outline, title: "Status", value: "On Time", isStatus: true),
-                            ],
-                          ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Divider(height: 1),
+                        ),
+                        _buildDetailRow(
+                          icon: Icons.location_on_outlined,
+                          title: "Lokasi Presensi",
+                          value: attendanceLocation,
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Divider(height: 1),
+                        ),
+                        _buildDetailRow(
+                          icon: Icons.verified_user_outlined,
+                          title: "Status Kehadiran",
+                          value: attendanceStatus,
+                          isStatus: true,
+                          customStatusColor: currentStatusText,
+                          customStatusBg: currentStatusBg,
                         ),
                       ],
                     ),
                   ),
+                  
                   const Spacer(),
-
-                  // --- TOMBOL DONE (Logika Baru) ---
+                  
+                  // Tombol Selesai (Bawaan Asli Kamu)
                   SizedBox(
-                    width: double.infinity, 
-                    height: 56,
+                    width: double.infinity, height: 56,
                     child: ElevatedButton(
                       onPressed: () {
-                        // LOGIKA BARU: Hapus semua layar dan paksa balik ke MainScreen (Home)
-                        Navigator.of(context).pushAndRemoveUntil(
-                          MaterialPageRoute(builder: (context) => const MainScreen()),
-                          (route) => false, // Menghapus semua history navigasi sebelumnya
-                        );
+                        // Kembali ke layar utama halaman paling depan (Layar Utama Tab Index 0)
+                        Navigator.of(context).popUntil((route) => route.isFirst);
                       },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: primary,
+                        foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        elevation: 4,
-                        shadowColor: primary.withOpacity(0.4),
+                        elevation: 0,
                       ),
-                      child: const Text(
-                        "Done", 
-                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)
-                      ),
+                      child: const Text("Selesai", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
@@ -168,7 +147,16 @@ class SuccessScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildDetailRow({required IconData icon, required String title, required String value, String? subValue, bool isStatus = false}) {
+  // Komponen baris Bento Detail bawaan codingan asli kamu
+  Widget _buildDetailRow({
+    required IconData icon, 
+    required String title, 
+    required String value, 
+    String? subValue, 
+    bool isStatus = false,
+    Color? customStatusColor,
+    Color? customStatusBg,
+  }) {
     return Row(
       children: [
         Container(
@@ -186,8 +174,18 @@ class SuccessScreen extends StatelessWidget {
               if (isStatus)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(color: secondaryContainer, borderRadius: BorderRadius.circular(100)),
-                  child: Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: onSecondaryContainer)),
+                  decoration: BoxDecoration(
+                    color: customStatusBg ?? secondaryContainer, 
+                    borderRadius: BorderRadius.circular(100)
+                  ),
+                  child: Text(
+                    value, 
+                    style: TextStyle(
+                      fontSize: 12, 
+                      fontWeight: FontWeight.w700, 
+                      color: customStatusColor ?? onSecondaryContainer
+                    )
+                  ),
                 )
               else
                 Text(value, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: onSurface)),
@@ -195,7 +193,7 @@ class SuccessScreen extends StatelessWidget {
           ),
         ),
         if (subValue != null)
-          Text(subValue, style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
+          Text(subValue, style: TextStyle(fontSize: 14, color: onSurfaceVariant, fontWeight: FontWeight.w500)),
       ],
     );
   }

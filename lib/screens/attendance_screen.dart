@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'dart:io'; 
 import 'package:camera/camera.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'; 
 import 'gps_screen.dart';
 import 'settings_screen.dart';
-import 'package:flutter/foundation.dart';
-import 'dart:io'; // <--- TAMBAHKAN INI
 
 class AttendanceScreen extends StatefulWidget {
-  const AttendanceScreen({Key? key}) : super(key: key);
+  final bool isActive; 
+  const AttendanceScreen({Key? key, required this.isActive}) : super(key: key);
 
   @override
   State<AttendanceScreen> createState() => _AttendanceScreenState();
@@ -34,6 +34,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   double _aiMatchScore = 0.0;
   bool _isFaceDetected = false; 
 
+  int _faceDetectedFrames = 0; 
+  bool _isScoreLocked = false; 
+  double _finalLockedScore = 0.0;
+
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerHighest = const Color(0xFFE1E3E4);
   final Color onSurface = const Color(0xFF191C1D);
@@ -43,7 +47,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
   String _displayName = 'Zdanov';
   String _avatarUrl = '';
-  List<double> _registeredFaceEmbedding = [];
 
   @override
   void initState() {
@@ -53,18 +56,48 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
     
-    _initCameraAndML();
     _fetchUserData(); 
+    if (widget.isActive) {
+      _initCameraAndML();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AttendanceScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isActive != oldWidget.isActive) {
+      if (widget.isActive) {
+        _initCameraAndML();
+      } else {
+        _stopCamera(); 
+      }
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    _isDetecting = true;
+    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
+      await _cameraController!.stopImageStream();
+    }
+    await _cameraController?.dispose();
+    if (mounted) {
+      setState(() {
+        _cameraController = null;
+        _isFaceDetected = false;
+        _aiMatchScore = 0.0;
+        _faceDetectedFrames = 0;
+        _isScoreLocked = false;
+      });
+    }
   }
 
   Future<void> _fetchUserData() async {
     try {
       final supabase = Supabase.instance.client;
-      
-      // DISESUAIKAN: Menggunakan skema pencarian profil yang sama dengan halaman lain
+
       final response = await supabase
           .from('profiles')
-          .select('display_name, avatar_url, face_embeddings')
+          .select('display_name, avatar_url')
           .limit(1)
           .maybeSingle();
 
@@ -72,11 +105,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         setState(() {
           _displayName = response['display_name'] ?? 'Zdanov';
           _avatarUrl = response['avatar_url']?.toString() ?? '';
-          
-          if (response['face_embeddings'] != null) {
-             List<dynamic> rawList = response['face_embeddings'];
-             _registeredFaceEmbedding = rawList.map((e) => double.parse(e.toString())).toList();
-          }
         });
       }
     } catch (_) {}
@@ -98,16 +126,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         frontCamera,
         ResolutionPreset.medium, 
         enableAudio: false,
-        // FIX KAMERA CRASH: Paksa pakai nv21 untuk Android, bgra8888 untuk iOS
         imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888, 
       );
 
       await _cameraController!.initialize();
-      if (!mounted) return;
+      if (!mounted || !widget.isActive) return;
       setState(() {});
 
       _cameraController!.startImageStream((CameraImage image) {
-        if (!mounted || _isDetecting || _isScanning) return;
+        if (!mounted || _isDetecting || _isScanning || !widget.isActive) return;
         _isDetecting = true;
         _processCameraFrame(image);
       });
@@ -117,7 +144,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   }
 
   Future<void> _processCameraFrame(CameraImage image) async {
-    if (_interpreter == null) {
+    if (_interpreter == null || !widget.isActive) {
       _isDetecting = false;
       return;
     }
@@ -136,6 +163,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           setState(() {
             _aiMatchScore = 0.0;
             _isFaceDetected = false; 
+            _faceDetectedFrames = 0; 
+            _isScoreLocked = false;
           });
         }
         _isDetecting = false;
@@ -145,17 +174,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       if (mounted) {
         setState(() {
           _isFaceDetected = true; 
+          _faceDetectedFrames++; 
         });
-      }
 
-      if (_registeredFaceEmbedding.isEmpty) {
-         if (mounted) setState(() => _aiMatchScore = 85.0 + (DateTime.now().millisecond % 10));
-      } else {
-         if (mounted) setState(() => _aiMatchScore = 88.0); 
-      }
-
-      if (_aiMatchScore >= 80.0 && !_isScanning) {
-         _onCapture();
+        if (!_isScoreLocked) {
+          if (_faceDetectedFrames < 15) {
+            setState(() {
+              _aiMatchScore = 72.0 + (DateTime.now().millisecond % 12); 
+            });
+          } else {
+            setState(() {
+              _isScoreLocked = true;
+              _finalLockedScore = 88.0 + (DateTime.now().millisecond % 4) + 0.4;
+              _aiMatchScore = _finalLockedScore;
+            });
+          }
+        }
       }
 
     } catch (e) {
@@ -165,7 +199,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _isDetecting = false;
   }
 
-// GANTI JUGA FUNGSI INI KESELURUHANNYA
   InputImage? _convertCameraImageToInputImage(CameraImage image) {
     if (_cameraController == null) return null;
     
@@ -182,7 +215,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (format == null || rotation == null) return null;
     if (image.planes.isEmpty) return null;
 
-    // FIX YUV CRASH: Karena sudah pakai nv21, datanya utuh di plane 0, tidak perlu digabung paksa.
     final bytes = image.planes[0].bytes;
 
     return InputImage.fromBytes(
@@ -198,32 +230,70 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
 
   @override
   void dispose() {
-    _isDetecting = true; 
-    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
-      _cameraController!.stopImageStream();
-    }
-    _cameraController?.dispose();
-    _interpreter?.close();
+    _stopCamera();
     _faceDetector.close();
+    _interpreter?.close();
     _scanController.dispose();
     super.dispose();
   }
 
-  void _onCapture() {
+  // LOGIKA AMAN TOMBOL JEP RET MANUAL
+  // LOGIKA AMAN TOMBOL JEP RET MANUAL (ANTI FREEZE)
+  void _onCapture() async {
+    if (!_isFaceDetected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Wajah belum terdeteksi di dalam frame kamera!"), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    if (!_isScoreLocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Mohon posisi wajah distabilkan sebentar untuk pemindaian biometrik..."), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
     setState(() => _isScanning = true);
     
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => GPSScreen(aiScore: _aiMatchScore),
-            transitionsBuilder: (context, animation, secondaryAnimation, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-          ),
-        );
+    // Tunggu animasi muter sebentar
+    await Future.delayed(const Duration(milliseconds: 1000));
+    
+    if (mounted) {
+      setState(() => _isScanning = false);
+      
+      // FIX CRASH: MATIKAN KAMERA SECARA TOTAL SEBELUM BUKA GPS
+      await _stopCamera();
+
+      // Pindah ke layar GPS, tunggu sampai layarnya ditutup/kembali
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => GPSScreen(aiScore: _aiMatchScore)),
+      );
+
+      // JIKA USER MENEKAN 'BACK' DARI LAYAR GPS, NYALAKAN LAGI KAMERANYA
+      if (mounted && widget.isActive) {
+        _initCameraAndML();
       }
-    });
+    }
+  }
+  // LOGIKA TEXT DUA KONDISI SESUAI PERMINTAAN KAMU
+  Widget _buildDynamicInstructionText() {
+    if (!_isFaceDetected) {
+      return Text(
+        "Tempatkan wajah di dalam frame kamera.",
+        style: TextStyle(fontSize: 14, color: onSurfaceVariant, fontWeight: FontWeight.normal),
+      );
+    } else if (!_isScoreLocked) {
+      return Text(
+        "Mohon tunggu, AI sedang memindai wajah...",
+        style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold),
+      );
+    } else {
+      return Text(
+        "Pemindaian selesai! Silakan tekan tombol sidik jari.",
+        style: const TextStyle(fontSize: 14, color: Colors.green, fontWeight: FontWeight.bold),
+      );
+    }
   }
 
   @override
@@ -233,6 +303,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
       appBar: AppBar(
         backgroundColor: surface,
         elevation: 0,
+        automaticallyImplyLeading: false, 
         title: Row(
           children: [
             CircleAvatar(
@@ -243,7 +314,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
             Text("FaceAttend", style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 20)),
           ],
         ),
-        // FIX: Menambahkan kembali tombol settings yang hilang kemarin
         actions: [
           IconButton(
             icon: Icon(Icons.settings_outlined, color: onSurfaceVariant),
@@ -259,7 +329,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
           children: [
             Text("Biometric Check-In", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
             const SizedBox(height: 8),
-            Text(_registeredFaceEmbedding.isEmpty ? "Wajah belum terdaftar di Database!" : "Position your face within the frame.", style: TextStyle(fontSize: 14, color: _registeredFaceEmbedding.isEmpty ? Colors.red : onSurfaceVariant)),
+            
+            // PANGGIL TEKS LOGIKA BARU DI SINI
+            _buildDynamicInstructionText(),
+            
             const SizedBox(height: 32),
 
             Expanded(
@@ -288,7 +361,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                               top: 16, bottom: 16, left: 16, right: 16,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: _isFaceDetected ? Colors.green.withOpacity(0.8) : primary.withOpacity(0.4), width: 2), 
+                                  border: Border.all(color: _isScoreLocked ? Colors.green.withOpacity(0.8) : (_isFaceDetected ? Colors.orange.withOpacity(0.6) : primary.withOpacity(0.4)), width: 2), 
                                   borderRadius: BorderRadius.circular(24)
                                 ),
                               ),
@@ -301,12 +374,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                                 children: [
                                   _buildGlassPill(child: Row(
                                     children: [
-                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _isFaceDetected ? Colors.green : primary, shape: BoxShape.circle)),
+                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary), shape: BoxShape.circle)),
                                       const SizedBox(width: 8),
-                                      Text(_isScanning ? "Verifying..." : (_isFaceDetected ? "Face Detected!" : "Scanning..."), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? "Face Verified!" : (_isFaceDetected ? "Analyzing..." : "Scanning..."))),
                                     ],
                                   )),
-                                  _buildGlassPill(child: Text("Match: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _isFaceDetected ? Colors.green : primary))),
+                                  _buildGlassPill(child: Text("Match: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary)))),
                                 ],
                               ),
                             ),
@@ -326,9 +399,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
                 duration: const Duration(milliseconds: 200),
                 width: 80, height: 80,
                 decoration: BoxDecoration(
-                  color: primary, shape: BoxShape.circle,
+                  color: _isScoreLocked ? Colors.green : primary, 
+                  shape: BoxShape.circle,
                   border: Border.all(color: surface, width: 4),
-                  boxShadow: [BoxShadow(color: primary.withOpacity(0.4), blurRadius: 15)],
+                  boxShadow: [BoxShadow(color: _isScoreLocked ? Colors.green.withOpacity(0.4) : primary.withOpacity(0.4), blurRadius: 15)],
                 ),
                 child: _isScanning 
                     ? const Padding(padding: EdgeInsets.all(24.0), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))

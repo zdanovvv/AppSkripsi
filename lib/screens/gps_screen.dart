@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart'; // IMPORT GOOGLE MAPS
+import 'package:google_maps_flutter/google_maps_flutter.dart'; 
 import '../utils/face_utils.dart'; 
 import 'success_screen.dart'; 
 
@@ -18,7 +18,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
   late AnimationController _pulseController;
   GoogleMapController? _mapController;
   
-  // KOORDINAT TARGET ABSEN (Rumah desimal)
+  // KOORDINAT TARGET ABSEN (Rumah)
   final double targetLat = 1.104778;
   final double targetLng = 103.967333;
   final double maxRadius = 50.0; 
@@ -94,7 +94,6 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
           _isLoadingLoc = false;
         });
 
-        // Geser kamera maps ke lokasi user yang baru
         _mapController?.animateCamera(
           CameraUpdate.newLatLngZoom(LatLng(position.latitude, position.longitude), 17),
         );
@@ -134,6 +133,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
     );
   }
 
+  // --- LOGIKA UTAMA SINKRONISASI DATABASE + TELAT ---
   Future<void> _submitAttendance() async {
     if (!_isInRange || _currentPosition == null) return;
     
@@ -141,9 +141,33 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
 
     try {
       final supabase = Supabase.instance.client;
-      final userId = supabase.auth.currentUser?.id;
+      String? userId = supabase.auth.currentUser?.id;
+
+      if (userId == null) {
+        final fallbackProfile = await supabase.from('profiles').select('id').limit(1).maybeSingle();
+        if (fallbackProfile != null) {
+          userId = fallbackProfile['id'] as String;
+        }
+      }
 
       if (userId == null) throw Exception("Sesi login tidak valid.");
+
+      final now = DateTime.now();
+      
+      // 1. Format String Jam (Contoh hasil: 07:45 AM atau 02:15 PM)
+      String period = now.hour >= 12 ? "PM" : "AM";
+      int displayHour = now.hour > 12 ? now.hour - 12 : now.hour;
+      if (displayHour == 0) displayHour = 12;
+      String formattedTime = "${displayHour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')} $period";
+
+      // 2. Logika Hitung Keterlambatan (Batas jam masuk kantor: 08:00 AM)
+      String calculatedStatus = "Tepat Waktu";
+      if (now.hour > 8 || (now.hour == 8 && now.minute > 0)) {
+        calculatedStatus = "Telat";
+      }
+
+      // 3. Nama Tempat Presensi Berdasarkan Radius Zona
+      String locationPlaceName = "Rumah Zdanov";
 
       final today = DateTime.now();
       final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
@@ -158,17 +182,21 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
           .maybeSingle();
 
       if (existingRecord == null) {
+        // PROSES INSERT CHECK-IN
         await supabase.from('attendance').insert({
           'user_id': userId,
           'latitude': _currentPosition!.latitude,
           'longitude': _currentPosition!.longitude,
           'ai_match_score': widget.aiScore,
-          'status': 'Hadir',
+          'status': calculatedStatus, // MENYIMPAN STATUS ASLI KE DB SUPABASE
         });
       } else if (existingRecord['check_out_time'] == null) {
+        // PROSES UPDATE CHECK-OUT
         await supabase.from('attendance').update({
           'check_out_time': DateTime.now().toUtc().toIso8601String(),
         }).eq('id', existingRecord['id']);
+        
+        locationPlaceName = "$locationPlaceName (Pulang)";
       } else {
         _showError("Kamu sudah menyelesaikan presensi masuk dan pulang hari ini.");
         setState(() => _isSavingDB = false);
@@ -176,8 +204,15 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       }
 
       if (mounted) {
+        // LEMPAR DATA TERVERIFIKASI KE SCREEN BERIKUTNYA
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const SuccessScreen()),
+          MaterialPageRoute(
+            builder: (context) => SuccessScreen(
+              attendanceTime: formattedTime,
+              attendanceLocation: locationPlaceName,
+              attendanceStatus: calculatedStatus,
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -215,38 +250,38 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       ),
       body: Stack(
         children: [
-          // FIX: Mengganti dummy image background dengan Google Map asli
           Positioned.fill(
-            child: GoogleMap(
-              initialCameraPosition: CameraPosition(
-                target: LatLng(targetLat, targetLng),
-                zoom: 16,
-              ),
-              myLocationEnabled: true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              onMapCreated: (controller) => _mapController = controller,
-              // Menggambar batas radius 50 meter di peta
-              circles: {
-                Circle(
-                  circleId: const CircleId("zone_radius"),
-                  center: LatLng(targetLat, targetLng),
-                  radius: maxRadius,
-                  fillColor: (_isInRange ? primary : errorRed).withOpacity(0.15),
-                  strokeColor: _isInRange ? primary : errorRed,
-                  strokeWidth: 2,
-                ),
-              },
-              // Menaruh pin merah di koordinat rumah target
-              markers: {
-                Marker(
-                  markerId: const MarkerId("office_target"),
-                  position: LatLng(targetLat, targetLng),
-                  infoWindow: const InfoWindow(title: "Batas Absen Rumah"),
-                ),
-              },
-            ),
-          ),
+            child: Container(color: Colors.grey[200]),
+),
+          // Positioned.fill(
+          //   child: GoogleMap(
+          //     initialCameraPosition: CameraPosition(
+          //       target: LatLng(targetLat, targetLng),
+          //       zoom: 16,
+          //     ),
+          //     myLocationEnabled: true,
+          //     myLocationButtonEnabled: false,
+          //     zoomControlsEnabled: false,
+          //     onMapCreated: (controller) => _mapController = controller,
+          //     circles: {
+          //       Circle(
+          //         circleId: const CircleId("zone_radius"),
+          //         center: LatLng(targetLat, targetLng),
+          //         radius: maxRadius,
+          //         fillColor: (_isInRange ? primary : errorRed).withOpacity(0.15),
+          //         strokeColor: _isInRange ? primary : errorRed,
+          //         strokeWidth: 2,
+          //       ),
+          //     },
+          //     markers: {
+          //       Marker(
+          //         markerId: const MarkerId("office_target"),
+          //         position: LatLng(targetLat, targetLng),
+          //         infoWindow: const InfoWindow(title: "Batas Absen Rumah"),
+          //       ),
+          //     },
+          //   ),
+          // ),
 
           Positioned(
             top: 100, right: 20,
