@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'gps_screen.dart';
 import 'settings_screen.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:io'; // <--- TAMBAHKAN INI
 
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({Key? key}) : super(key: key);
@@ -97,7 +98,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
         frontCamera,
         ResolutionPreset.medium, 
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420, 
+        // FIX KAMERA CRASH: Paksa pakai nv21 untuk Android, bgra8888 untuk iOS
+        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888, 
       );
 
       await _cameraController!.initialize();
@@ -163,6 +165,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     _isDetecting = false;
   }
 
+// GANTI JUGA FUNGSI INI KESELURUHANNYA
   InputImage? _convertCameraImageToInputImage(CameraImage image) {
     if (_cameraController == null) return null;
     
@@ -179,12 +182,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
     if (format == null || rotation == null) return null;
     if (image.planes.isEmpty) return null;
 
-    // FIX: Gabungkan semua lapisan (Y, U, V) YUV420 menjadi satu Array utuh
-    final WriteBuffer allBytes = WriteBuffer();
-    for (final Plane plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
-    final bytes = allBytes.done().buffer.asUint8List();
+    // FIX YUV CRASH: Karena sudah pakai nv21, datanya utuh di plane 0, tidak perlu digabung paksa.
+    final bytes = image.planes[0].bytes;
 
     return InputImage.fromBytes(
       bytes: bytes, 
