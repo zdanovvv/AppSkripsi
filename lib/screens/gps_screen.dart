@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
-import 'success_screen.dart'; // Pastikan file ini sudah ada
+import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart'; // IMPORT GOOGLE MAPS
+import '../utils/face_utils.dart'; 
+import 'success_screen.dart'; 
 
 class GPSScreen extends StatefulWidget {
-  const GPSScreen({Key? key}) : super(key: key);
+  final double aiScore;
+  const GPSScreen({Key? key, required this.aiScore}) : super(key: key);
 
   @override
   State<GPSScreen> createState() => _GPSScreenState();
@@ -11,6 +16,18 @@ class GPSScreen extends StatefulWidget {
 
 class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
+  GoogleMapController? _mapController;
+  
+  // KOORDINAT TARGET ABSEN (Rumah desimal)
+  final double targetLat = 1.104778;
+  final double targetLng = 103.967333;
+  final double maxRadius = 50.0; 
+
+  bool _isLoadingLoc = true;
+  bool _isSavingDB = false;
+  double _currentDistance = 0.0;
+  bool _isInRange = false;
+  Position? _currentPosition;
 
   final Color surface = const Color(0xFFF8F9FA);
   final Color onSurface = const Color(0xFF191C1D);
@@ -19,6 +36,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
   final Color primaryContainer = const Color(0xFF1A73E8);
   final Color outlineVariant = const Color(0xFFC1C6D6);
   final Color successGreen = const Color(0xFF10B981); 
+  final Color errorRed = const Color(0xFFBA1A1A); 
 
   @override
   void initState() {
@@ -27,11 +45,158 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+
+    _checkLocation();
+  }
+
+  Future<void> _checkLocation() async {
+    setState(() => _isLoadingLoc = true);
+
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      setState(() => _isLoadingLoc = false);
+      _showEnableGPSDialog(); 
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        _showError("Izin lokasi ditolak.");
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      _showError("Izin lokasi diblokir permanen di pengaturan.");
+      return;
+    }
+
+    try {
+      Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      
+      if (position.isMocked) {
+        _showError("Aplikasi Fake GPS terdeteksi. Presensi ditolak.");
+        return;
+      }
+
+      double distance = haversineDistance(
+        position.latitude, position.longitude, 
+        targetLat, targetLng
+      );
+
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+          _currentDistance = distance;
+          _isInRange = distance <= maxRadius;
+          _isLoadingLoc = false;
+        });
+
+        // Geser kamera maps ke lokasi user yang baru
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLngZoom(LatLng(position.latitude, position.longitude), 17),
+        );
+      }
+    } catch (e) {
+      _showError("Gagal mendapatkan lokasi: $e");
+    }
+  }
+
+  void _showEnableGPSDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text("GPS Nonaktif"),
+          content: const Text("Fitur presensi membutuhkan akses lokasi. Silakan nyalakan GPS kamu terlebih dahulu."),
+          actions: [
+            TextButton(
+              child: const Text("Batal"),
+              onPressed: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).pop(); 
+              },
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white),
+              child: const Text("Buka Pengaturan"),
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await Geolocator.openLocationSettings();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _submitAttendance() async {
+    if (!_isInRange || _currentPosition == null) return;
+    
+    setState(() => _isSavingDB = true);
+
+    try {
+      final supabase = Supabase.instance.client;
+      final userId = supabase.auth.currentUser?.id;
+
+      if (userId == null) throw Exception("Sesi login tidak valid.");
+
+      final today = DateTime.now();
+      final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
+      final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+
+      final existingRecord = await supabase
+          .from('attendance')
+          .select('id, check_in_time, check_out_time')
+          .eq('user_id', userId)
+          .gte('check_in_time', startOfDay)
+          .lte('check_in_time', endOfDay)
+          .maybeSingle();
+
+      if (existingRecord == null) {
+        await supabase.from('attendance').insert({
+          'user_id': userId,
+          'latitude': _currentPosition!.latitude,
+          'longitude': _currentPosition!.longitude,
+          'ai_match_score': widget.aiScore,
+          'status': 'Hadir',
+        });
+      } else if (existingRecord['check_out_time'] == null) {
+        await supabase.from('attendance').update({
+          'check_out_time': DateTime.now().toUtc().toIso8601String(),
+        }).eq('id', existingRecord['id']);
+      } else {
+        _showError("Kamu sudah menyelesaikan presensi masuk dan pulang hari ini.");
+        setState(() => _isSavingDB = false);
+        return;
+      }
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => const SuccessScreen()),
+        );
+      }
+    } catch (e) {
+      _showError("Gagal menyimpan ke database: $e");
+      setState(() => _isSavingDB = false);
+    }
+  }
+
+  void _showError(String msg) {
+    if (mounted) {
+      setState(() => _isLoadingLoc = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: errorRed));
+    }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _mapController?.dispose();
     super.dispose();
   }
 
@@ -41,83 +206,79 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       backgroundColor: surface,
       extendBodyBehindAppBar: true, 
       appBar: AppBar(
-        backgroundColor: surface.withOpacity(0.9),
+        backgroundColor: surface.withOpacity(0.8),
         elevation: 0,
+        scrolledUnderElevation: 0,
         leading: IconButton(icon: Icon(Icons.arrow_back, color: onSurfaceVariant), onPressed: () => Navigator.pop(context)),
         title: Text("Location Check", style: TextStyle(color: primary, fontWeight: FontWeight.bold, fontSize: 18)),
         centerTitle: true,
       ),
       body: Stack(
         children: [
-          // Background Map Placeholder
+          // FIX: Mengganti dummy image background dengan Google Map asli
           Positioned.fill(
-            child: Image.network(
-              "https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=800&auto=format&fit=crop", 
-              fit: BoxFit.cover,
-            ),
-          ),
-          Positioned.fill(child: Container(color: surface.withOpacity(0.2))), 
-
-          // Lingkaran Radius Kantor
-          Center(
-            child: Container(
-              width: 250, height: 250,
-              decoration: BoxDecoration(
-                color: primaryContainer.withOpacity(0.1),
-                shape: BoxShape.circle,
-                border: Border.all(color: primary.withOpacity(0.3), width: 1),
+            child: GoogleMap(
+              initialCameraPosition: CameraPosition(
+                target: LatLng(targetLat, targetLng),
+                zoom: 16,
               ),
-              child: Center(child: Icon(Icons.corporate_fare, size: 48, color: primary.withOpacity(0.3))),
+              myLocationEnabled: true,
+              myLocationButtonEnabled: false,
+              zoomControlsEnabled: false,
+              onMapCreated: (controller) => _mapController = controller,
+              // Menggambar batas radius 50 meter di peta
+              circles: {
+                Circle(
+                  circleId: const CircleId("zone_radius"),
+                  center: LatLng(targetLat, targetLng),
+                  radius: maxRadius,
+                  fillColor: (_isInRange ? primary : errorRed).withOpacity(0.15),
+                  strokeColor: _isInRange ? primary : errorRed,
+                  strokeWidth: 2,
+                ),
+              },
+              // Menaruh pin merah di koordinat rumah target
+              markers: {
+                Marker(
+                  markerId: const MarkerId("office_target"),
+                  position: LatLng(targetLat, targetLng),
+                  infoWindow: const InfoWindow(title: "Batas Absen Rumah"),
+                ),
+              },
             ),
           ),
 
-          // Titik User dengan Animasi Ping
-          Positioned(
-            top: MediaQuery.of(context).size.height * 0.48, 
-            left: MediaQuery.of(context).size.width * 0.45,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                ScaleTransition(
-                  scale: Tween<double>(begin: 1.0, end: 3.0).animate(_pulseController),
-                  child: FadeTransition(
-                    opacity: Tween<double>(begin: 0.8, end: 0.0).animate(_pulseController),
-                    child: Container(width: 32, height: 32, decoration: BoxDecoration(color: primary.withOpacity(0.5), shape: BoxShape.circle)),
-                  ),
-                ),
-                Container(
-                  width: 20, height: 20,
-                  decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle, border: Border.all(color: primary, width: 2), boxShadow: const [BoxShadow(blurRadius: 5, color: Colors.black26)]),
-                  child: Center(child: Container(width: 8, height: 8, decoration: BoxDecoration(color: primary, shape: BoxShape.circle))),
-                ),
-              ],
-            ),
-          ),
-
-          // Tombol Recenter GPS
           Positioned(
             top: 100, right: 20,
             child: FloatingActionButton(
               mini: true, backgroundColor: Colors.white, foregroundColor: onSurface,
-              onPressed: () {}, child: const Icon(Icons.my_location),
+              onPressed: _checkLocation, child: const Icon(Icons.my_location),
             ),
           ),
 
-          // Floating Panel Bawah (Bento Glassmorphism)
           Positioned(
             bottom: 32, left: 20, right: 20,
             child: Column(
               children: [
                 Row(
                   children: [
-                    Expanded(child: _buildBentoCard(title: "GPS Signal", value: "High Accuracy", icon: Icons.satellite_alt, dotColor: successGreen)),
+                    Expanded(child: _buildBentoCard(
+                      title: "GPS Signal", 
+                      value: _isLoadingLoc ? "Scanning..." : (_isInRange ? "High Accuracy" : "Out of Zone"), 
+                      icon: Icons.satellite_alt, 
+                      dotColor: _isLoadingLoc ? Colors.grey : (_isInRange ? successGreen : errorRed)
+                    )),
                     const SizedBox(width: 16),
-                    Expanded(child: _buildBentoCard(title: "Distance", value: "12m", subtitle: "/ 50m max", icon: Icons.straighten)),
+                    Expanded(child: _buildBentoCard(
+                      title: "Distance", 
+                      value: _isLoadingLoc ? "--" : "${_currentDistance.toInt()}m", 
+                      subtitle: "/ ${maxRadius.toInt()}m", 
+                      icon: Icons.straighten
+                    )),
                   ],
                 ),
                 const SizedBox(height: 16),
 
-                // Card Verifikasi & Tombol Confirm
                 ClipRRect(
                   borderRadius: BorderRadius.circular(16),
                   child: BackdropFilter(
@@ -130,15 +291,26 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.check_circle, color: primary, size: 28),
+                              Icon(
+                                _isLoadingLoc ? Icons.hourglass_empty : (_isInRange ? Icons.check_circle : Icons.cancel), 
+                                color: _isLoadingLoc ? outlineVariant : (_isInRange ? primary : errorRed), 
+                                size: 28
+                              ),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text("Location Verified", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: onSurface)),
+                                    Text(
+                                      _isLoadingLoc ? "Locating..." : (_isInRange ? "Location Verified" : "Too Far Away"), 
+                                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: onSurface)
+                                    ),
                                     const SizedBox(height: 4),
-                                    Text("You are within the allowed check-in zone for HQ Office.", style: TextStyle(fontSize: 14, color: onSurfaceVariant)),
+                                    Text(
+                                      _isLoadingLoc ? "Please wait while we check your position." : 
+                                      (_isInRange ? "You are within the allowed check-in zone." : "You must be closer to the center point to check-in."), 
+                                      style: TextStyle(fontSize: 14, color: onSurfaceVariant)
+                                    ),
                                   ],
                                 ),
                               ),
@@ -146,31 +318,19 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
                           ),
                           const SizedBox(height: 20),
                           
-                          // --- TOMBOL CONFIRM LOCATION ---
                           SizedBox(
                             width: double.infinity, height: 56,
                             child: ElevatedButton.icon(
-                              onPressed: () {
-                                // ANIMASI TRANSISI KE SUCCESS SCREEN
-                                Navigator.of(context).pushReplacement(
-                                  PageRouteBuilder(
-                                    pageBuilder: (context, animation, secondaryAnimation) => const SuccessScreen(),
-                                    transitionsBuilder: (context, animation, secondaryAnimation, child) {
-                                      var fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: animation, curve: Curves.easeIn));
-                                      var scaleAnimation = Tween<double>(begin: 0.8, end: 1.0).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutBack));
-
-                                      return FadeTransition(
-                                        opacity: fadeAnimation,
-                                        child: ScaleTransition(scale: scaleAnimation, child: child),
-                                      );
-                                    },
-                                    transitionDuration: const Duration(milliseconds: 600),
-                                  ),
-                                );
-                              },
-                              style: ElevatedButton.styleFrom(backgroundColor: primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                              icon: const Text("Confirm Location", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-                              label: const Icon(Icons.arrow_forward, color: Colors.white),
+                              onPressed: (!_isInRange || _isLoadingLoc || _isSavingDB) ? null : _submitAttendance,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: primary, 
+                                disabledBackgroundColor: outlineVariant.withOpacity(0.5),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
+                              ),
+                              icon: _isSavingDB 
+                                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                : Text(_isInRange ? "Confirm Attendance" : "Locked", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                              label: _isSavingDB ? const SizedBox.shrink() : const Icon(Icons.arrow_forward, color: Colors.white),
                             ),
                           ),
                         ],
