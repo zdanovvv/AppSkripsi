@@ -66,24 +66,26 @@ class HomeScreenState extends State<HomeScreen> {
 
       // Tarik Data Absensi Spesifik Hari Ini berdasarkan ID aktif
       if (activeUserId.isNotEmpty) {
+        // Batas hari dihitung lokal lalu dikirim sebagai UTC (sama dengan gps_screen).
         final today = DateTime.now();
-        final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
-        final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+        final startOfDay = DateTime(today.year, today.month, today.day).toUtc().toIso8601String();
+        final endOfDay = DateTime(today.year, today.month, today.day + 1).toUtc().toIso8601String();
 
         final attendanceResponse = await supabase
             .from('attendance')
             .select()
             .eq('user_id', activeUserId)
             .gte('check_in_time', startOfDay)
-            .lte('check_in_time', endOfDay)
+            .lt('check_in_time', endOfDay)
+            .order('check_in_time', ascending: false)
+            .limit(1)
             .maybeSingle();
 
         if (mounted) {
           setState(() {
-            if (attendanceResponse != null) {
-              _hasCheckedIn = true;
-              _hasCheckedOut = attendanceResponse['check_out_time'] != null; 
-            }
+            // Selalu set ulang, jangan cuma saat data ada, supaya status tidak basi.
+            _hasCheckedIn = attendanceResponse != null;
+            _hasCheckedOut = attendanceResponse?['check_out_time'] != null;
           });
         }
       }

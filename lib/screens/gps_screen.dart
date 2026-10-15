@@ -169,16 +169,20 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       // 3. Nama Tempat Presensi Berdasarkan Radius Zona
       String locationPlaceName = "Rumah Zdanov";
 
+      // Batas hari dihitung di zona waktu lokal lalu dikirim sebagai UTC,
+      // supaya cocok dengan check_in_time yang disimpan Supabase dalam UTC.
       final today = DateTime.now();
-      final startOfDay = DateTime(today.year, today.month, today.day).toIso8601String();
-      final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59).toIso8601String();
+      final startOfDay = DateTime(today.year, today.month, today.day).toUtc().toIso8601String();
+      final endOfDay = DateTime(today.year, today.month, today.day + 1).toUtc().toIso8601String();
 
       final existingRecord = await supabase
           .from('attendance')
           .select('id, check_in_time, check_out_time')
           .eq('user_id', userId)
           .gte('check_in_time', startOfDay)
-          .lte('check_in_time', endOfDay)
+          .lt('check_in_time', endOfDay)
+          .order('check_in_time', ascending: false)
+          .limit(1) // aman walau sudah ada baris duplikat
           .maybeSingle();
 
       if (existingRecord == null) {

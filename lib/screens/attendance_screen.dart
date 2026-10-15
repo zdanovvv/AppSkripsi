@@ -76,10 +76,16 @@ void initState() {
 
   Future<void> _stopCamera() async {
     _isDetecting = true;
-    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
-      await _cameraController!.stopImageStream();
+    final controller = _cameraController;
+    _cameraController = null;
+    try {
+      if (controller != null && controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+      await controller?.dispose();
+    } catch (e) {
+      debugPrint("Gagal menutup kamera: $e");
     }
-    await _cameraController?.dispose();
     if (mounted) {
       setState(() {
         _cameraController = null;
@@ -110,7 +116,18 @@ void initState() {
     } catch (_) {}
   }
 
+  bool _isInitializing = false;
+
   Future<void> _initCameraAndML() async {
+    if (_isInitializing) return;
+    _isInitializing = true;
+
+    // Bersihkan sisa controller/interpreter sebelumnya supaya tidak bocor.
+    await _stopCamera();
+    _isDetecting = false; // _stopCamera mengisi true; tanpa reset deteksi mati setelah pindah tab
+    _interpreter?.close();
+    _interpreter = null;
+
     try {
       _interpreter = await Interpreter.fromAsset('assets/model_face_recognition.tflite');
     } catch (_) {}
@@ -129,17 +146,25 @@ void initState() {
         imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888, 
       );
 
-      await _cameraController!.initialize();
-      if (!mounted || !widget.isActive) return;
+      final controller = _cameraController!;
+      await controller.initialize();
+      if (!mounted || !widget.isActive || _cameraController != controller) {
+        // Layar sudah ditinggalkan saat inisialisasi: lepaskan kamera, jangan dibiarkan menggantung.
+        if (_cameraController == controller) _cameraController = null;
+        await controller.dispose();
+        return;
+      }
       setState(() {});
 
-      _cameraController!.startImageStream((CameraImage image) {
+      controller.startImageStream((CameraImage image) {
         if (!mounted || _isDetecting || _isScanning || !widget.isActive) return;
         _isDetecting = true;
         _processCameraFrame(image);
       });
     } catch (e) {
       debugPrint("Kamera error: $e");
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -230,18 +255,24 @@ void initState() {
 
 @override
 void dispose() {
+  _isDetecting = true; // hentikan pemrosesan frame baru
+  final controller = _cameraController;
+  _cameraController = null;
+  final interpreter = _interpreter;
+  _interpreter = null;
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
-      if (_cameraController != null) {
-        if (_cameraController!.value.isStreamingImages) {
-          await _cameraController!.stopImageStream();
+      if (controller != null) {
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
         }
-        await _cameraController!.dispose();
+        await controller.dispose();
       }
     } catch (_) {}
+    // Detector & interpreter ditutup SETELAH stream berhenti, agar tidak dipakai saat frame diproses.
+    try { await _faceDetector.close(); } catch (_) {}
+    try { interpreter?.close(); } catch (_) {}
   });
-  _faceDetector.close();
-  _interpreter?.close();
   _scanController.dispose();
   super.dispose();
 }
@@ -265,12 +296,8 @@ void dispose() {
 
   setState(() => _isScanning = true);
 
-  // Stop image stream dulu, tanpa dispose
-  try {
-    if (_cameraController != null && _cameraController!.value.isStreamingImages) {
-      await _cameraController!.stopImageStream();
-    }
-  } catch (_) {}
+  // Matikan kamera sepenuhnya (stream + dispose) sebelum pindah layar.
+  await _stopCamera();
 
   await Future.delayed(const Duration(milliseconds: 500));
 
@@ -282,8 +309,10 @@ void dispose() {
     MaterialPageRoute(builder: (context) => GPSScreen(aiScore: _aiMatchScore)),
   );
 
-  // Balik dari GPS, nyalakan kamera lagi
-  if (mounted && widget.isActive) {
+  // GPSScreen yang sukses diganti SuccessScreen lewat pushReplacement, sehingga await di atas
+  // selesai seketika. Nyalakan kamera lagi HANYA kalau layar ini kembali jadi layar teratas
+  // (misalnya user menekan tombol back dari GPS).
+  if (mounted && widget.isActive && (ModalRoute.of(context)?.isCurrent ?? false)) {
     _initCameraAndML();
   }
 }
