@@ -8,6 +8,7 @@ import 'gps_screen.dart';
 import 'settings_screen.dart';
 import '../utils/face_service.dart';
 import '../utils/face_utils.dart';
+import '../utils/liveness_service.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final bool isActive; 
@@ -25,7 +26,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableContours: false,
-      enableClassification: false,
+      enableClassification: true, // dibutuhkan liveness (probabilitas mata terbuka)
       performanceMode: FaceDetectorMode.fast, 
     ),
   );
@@ -38,6 +39,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   bool _isScoreLocked = false; // true = proses verifikasi selesai (cocok / tidak cocok)
   bool _isMatch = false; // true = wajah cocok dengan data terdaftar
   double _finalLockedScore = 0.0;
+
+  final LivenessChecker _liveness = LivenessChecker(); // challenge-response anti foto statis
 
   List<List<double>> _enrolled = []; // embedding wajah terdaftar milik user
   bool _enrolledLoaded = false;
@@ -88,6 +91,7 @@ void initState() {
   Future<void> _stopCamera() async {
     _isDetecting = true;
     _samples.clear();
+    _liveness.reset();
     _isMatch = false;
     final controller = _cameraController;
     _cameraController = null;
@@ -117,7 +121,7 @@ void initState() {
       final response = await supabase
           .from('profiles')
           .select('display_name, avatar_url')
-          .limit(1)
+          .eq('id', supabase.auth.currentUser?.id ?? '')
           .maybeSingle();
 
       if (mounted && response != null) {
@@ -182,16 +186,13 @@ void initState() {
   }
 
   // Ambil embedding wajah terdaftar milik user dari Supabase (kolom JSONB face_embeddings).
-  // Login app ini belum pakai Supabase Auth, jadi fallback ke profil pertama
-  // (sama seperti layar Profile, supaya registrasi & verifikasi menunjuk profil yang sama).
   Future<void> _loadEnrolled() async {
     try {
       final supabase = Supabase.instance.client;
       final uid = supabase.auth.currentUser?.id;
-      final query = supabase.from('profiles').select('face_embeddings');
-      final row = uid != null
-          ? await query.eq('id', uid).maybeSingle()
-          : await query.limit(1).maybeSingle();
+      final row = uid == null
+          ? null
+          : await supabase.from('profiles').select('face_embeddings').eq('id', uid).maybeSingle();
       final list = FaceService.parseEnrolled(row?['face_embeddings']);
       debugPrint("Embedding terdaftar: ${list.length}");
       if (mounted) {
@@ -208,6 +209,7 @@ void initState() {
 
   void _resetVerification() {
     _samples.clear();
+    _liveness.reset();
     if (!mounted) return;
     setState(() {
       _isScoreLocked = false;
@@ -267,6 +269,7 @@ void initState() {
 
       if (faces.isEmpty) {
         _samples.clear();
+        _liveness.onFaceLost();
         if (mounted) {
           setState(() {
             _aiMatchScore = 0.0;
@@ -289,7 +292,17 @@ void initState() {
         });
       }
 
-      // Tunggu wajah stabil beberapa frame, lalu ambil embedding sungguhan dari model.
+      // TAHAP 1 - Liveness: user harus kedip & tengok sesuai instruksi acak.
+      // Embedding baru diambil SETELAH lolos, jadi foto statis tidak pernah sampai ke model.
+      if (!_liveness.isPassed) {
+        _samples.clear();
+        _liveness.update(face);
+        if (mounted) setState(() => _aiMatchScore = 0.0);
+        _isDetecting = false;
+        return;
+      }
+
+      // TAHAP 2 - Tunggu wajah stabil beberapa frame, lalu ambil embedding sungguhan dari model.
       if (_faceDetectedFrames >= _warmupFrames) {
         final emb = FaceService.instance.embedFromCameraImage(image, face, sensor);
         if (emb != null) {
@@ -425,6 +438,12 @@ void dispose() {
         "Tempatkan wajah di dalam frame kamera.",
         style: TextStyle(fontSize: 14, color: onSurfaceVariant, fontWeight: FontWeight.normal),
       );
+    } else if (!_liveness.isPassed) {
+      return Text(
+        _liveness.timedOut ? "Waktu habis, ikuti instruksi baru:" : "Liveness ${_liveness.completedSteps + 1}/${_liveness.totalSteps}: ${_liveness.instruction}",
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold),
+      );
     } else if (!_isScoreLocked) {
       return const Text(
         "Mohon tunggu, AI sedang memverifikasi wajah...",
@@ -523,7 +542,7 @@ void dispose() {
                                     children: [
                                       Container(width: 8, height: 8, decoration: BoxDecoration(color: _stateColor, shape: BoxShape.circle)),
                                       const SizedBox(width: 8),
-                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? (_isMatch ? "Face Verified!" : "Not Matched") : (_isFaceDetected ? "Analyzing..." : "Scanning..."))),
+                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? (_isMatch ? "Face Verified!" : "Not Matched") : (_isFaceDetected ? (_liveness.isPassed ? "Analyzing..." : "Liveness check...") : "Scanning..."))),
                                     ],
                                   )),
                                   _buildGlassPill(child: Text("Similarity: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _stateColor))),

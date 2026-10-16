@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'; // Wajib import ini
-import 'screens/splash_screen.dart';
+import 'screens/auth_gate.dart';
 
 // Ubah main() jadi asynchronous karena kita butuh waktu buat konek database
 Future<void> main() async {
@@ -29,7 +29,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF005BBF)),
         useMaterial3: true,
       ),
-      home: const SplashScreen(),
+      home: const AuthGate(), // sudah login -> langsung Home; belum -> Splash
     );
   }
 }

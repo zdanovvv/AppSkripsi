@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart'; 
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../utils/face_utils.dart'; 
 import 'success_screen.dart'; 
 
@@ -16,12 +17,24 @@ class GPSScreen extends StatefulWidget {
 
 class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  GoogleMapController? _mapController;
-  
-  // KOORDINAT TARGET ABSEN (Rumah)
-  final double targetLat = 1.104778;
-  final double targetLng = 103.967333;
-  final double maxRadius = 50.0; 
+  final MapController _mapController = MapController();
+
+  // Titik absen diambil dari tabel `attendance_locations` di Supabase,
+  // jadi bisa diubah tanpa edit kode. Nilai di bawah hanya CADANGAN
+  // kalau tabel kosong / belum dibuat / sedang offline.
+  double targetLat = 1.104778;
+  double targetLng = 103.967333;
+  double maxRadius = 50.0;
+  String _targetName = 'Rumah Zdanov';
+  String? _targetId;
+
+  // Mode ubah titik (hanya untuk akun admin)
+  bool _isAdmin = false;
+  bool _editMode = false;
+  bool _savingTarget = false;
+  LatLng? _pending;
+
+  LatLng get _shownTarget => _pending ?? LatLng(targetLat, targetLng);
 
   bool _isLoadingLoc = true;
   bool _isSavingDB = false;
@@ -46,7 +59,13 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       duration: const Duration(seconds: 2),
     )..repeat();
 
-    _checkLocation();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await Future.wait([_loadTarget(), _loadIsAdmin()]);
+    if (!mounted) return;
+    await _checkLocation();
   }
 
   Future<void> _checkLocation() async {
@@ -94,9 +113,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
           _isLoadingLoc = false;
         });
 
-        _mapController?.animateCamera(
-          CameraUpdate.newLatLngZoom(LatLng(position.latitude, position.longitude), 17),
-        );
+        _fitMap();
       }
     } catch (e) {
       _showError("Gagal mendapatkan lokasi: $e");
@@ -143,13 +160,6 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       final supabase = Supabase.instance.client;
       String? userId = supabase.auth.currentUser?.id;
 
-      if (userId == null) {
-        final fallbackProfile = await supabase.from('profiles').select('id').limit(1).maybeSingle();
-        if (fallbackProfile != null) {
-          userId = fallbackProfile['id'] as String;
-        }
-      }
-
       if (userId == null) throw Exception("Sesi login tidak valid.");
 
       final now = DateTime.now();
@@ -167,7 +177,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       }
 
       // 3. Nama Tempat Presensi Berdasarkan Radius Zona
-      String locationPlaceName = "Rumah Zdanov";
+      String locationPlaceName = _targetName;
 
       // Batas hari dihitung di zona waktu lokal lalu dikirim sebagai UTC,
       // supaya cocok dengan check_in_time yang disimpan Supabase dalam UTC.
@@ -225,6 +235,174 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
     }
   }
 
+  // --- Titik absen dari database ---------------------------------------
+  Future<void> _loadTarget() async {
+    try {
+      final row = await Supabase.instance.client
+          .from('attendance_locations')
+          .select()
+          .eq('is_active', true)
+          .order('updated_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (row != null && mounted) {
+        setState(() {
+          _targetId = row['id']?.toString();
+          _targetName = row['name']?.toString() ?? _targetName;
+          targetLat = (row['latitude'] as num).toDouble();
+          targetLng = (row['longitude'] as num).toDouble();
+          maxRadius = (row['radius_m'] as num?)?.toDouble() ?? maxRadius;
+        });
+      }
+    } catch (e) {
+      debugPrint('Gagal ambil titik absen, pakai cadangan: $e');
+    }
+  }
+
+  Future<void> _loadIsAdmin() async {
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      final row = await Supabase.instance.client
+          .from('profiles')
+          .select('is_admin')
+          .eq('id', uid)
+          .maybeSingle();
+      if (mounted) setState(() => _isAdmin = row?['is_admin'] == true);
+    } catch (_) {
+      // kolom is_admin belum ada -> anggap bukan admin
+    }
+  }
+
+  void _recomputeRange() {
+    final p = _currentPosition;
+    if (p == null) return;
+    final d = haversineDistance(p.latitude, p.longitude, targetLat, targetLng);
+    setState(() {
+      _currentDistance = d;
+      _isInRange = d <= maxRadius;
+    });
+  }
+
+  // Pas-kan kamera supaya titik absen dan posisi user sama-sama terlihat.
+  void _fitMap() {
+    try {
+      final pts = <LatLng>[LatLng(targetLat, targetLng)];
+      final p = _currentPosition;
+      if (p != null) pts.add(LatLng(p.latitude, p.longitude));
+      if (pts.length == 1) {
+        _mapController.move(pts.first, 17);
+        return;
+      }
+      _mapController.fitCamera(
+        CameraFit.coordinates(
+          coordinates: pts,
+          padding: const EdgeInsets.fromLTRB(48, 140, 48, 340),
+          maxZoom: 18,
+        ),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _saveTarget() async {
+    final p = _pending;
+    if (p == null) return;
+    setState(() => _savingTarget = true);
+    try {
+      final sb = Supabase.instance.client;
+      final data = {
+        'latitude': p.latitude,
+        'longitude': p.longitude,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      if (_targetId != null) {
+        final res = await sb.from('attendance_locations').update(data).eq('id', _targetId!).select();
+        if (res.isEmpty) throw Exception('Tidak punya izin mengubah lokasi (bukan admin).');
+      } else {
+        final row = await sb
+            .from('attendance_locations')
+            .insert({...data, 'name': _targetName, 'radius_m': maxRadius, 'is_active': true})
+            .select()
+            .single();
+        _targetId = row['id']?.toString();
+      }
+      if (!mounted) return;
+      setState(() {
+        targetLat = p.latitude;
+        targetLng = p.longitude;
+        _editMode = false;
+        _pending = null;
+      });
+      _recomputeRange();
+      _fitMap();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Titik absen diperbarui.')));
+    } catch (e) {
+      _showError('Gagal menyimpan lokasi: $e');
+    } finally {
+      if (mounted) setState(() => _savingTarget = false);
+    }
+  }
+
+  Widget _buildEditCard() {
+    final p = _pending;
+    return Positioned(
+      bottom: 32, left: 20, right: 20,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: outlineVariant.withOpacity(0.3)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 12)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Ubah titik absen", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: onSurface)),
+            const SizedBox(height: 4),
+            Text(
+              p == null
+                  ? "Ketuk peta untuk memilih titik baru, atau pakai posisi kamu sekarang."
+                  : "${p.latitude.toStringAsFixed(6)}, ${p.longitude.toStringAsFixed(6)}",
+              style: TextStyle(fontSize: 14, color: onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: (_currentPosition == null || _savingTarget)
+                        ? null
+                        : () => setState(() => _pending = LatLng(_currentPosition!.latitude, _currentPosition!.longitude)),
+                    child: const Text("Posisi saya"),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _savingTarget ? null : () => setState(() { _editMode = false; _pending = null; }),
+                    child: const Text("Batal"),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: primary, foregroundColor: Colors.white),
+                    onPressed: (p == null || _savingTarget) ? null : _saveTarget,
+                    child: _savingTarget
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text("Simpan"),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showError(String msg) {
     if (mounted) {
       setState(() => _isLoadingLoc = false);
@@ -235,7 +413,7 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
   @override
   void dispose() {
     _pulseController.dispose();
-    _mapController?.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -255,46 +433,104 @@ class _GPSScreenState extends State<GPSScreen> with SingleTickerProviderStateMix
       body: Stack(
         children: [
           Positioned.fill(
-            child: Container(color: Colors.grey[200]),
-),
-          // Positioned.fill(
-          //   child: GoogleMap(
-          //     initialCameraPosition: CameraPosition(
-          //       target: LatLng(targetLat, targetLng),
-          //       zoom: 16,
-          //     ),
-          //     myLocationEnabled: true,
-          //     myLocationButtonEnabled: false,
-          //     zoomControlsEnabled: false,
-          //     onMapCreated: (controller) => _mapController = controller,
-          //     circles: {
-          //       Circle(
-          //         circleId: const CircleId("zone_radius"),
-          //         center: LatLng(targetLat, targetLng),
-          //         radius: maxRadius,
-          //         fillColor: (_isInRange ? primary : errorRed).withOpacity(0.15),
-          //         strokeColor: _isInRange ? primary : errorRed,
-          //         strokeWidth: 2,
-          //       ),
-          //     },
-          //     markers: {
-          //       Marker(
-          //         markerId: const MarkerId("office_target"),
-          //         position: LatLng(targetLat, targetLng),
-          //         infoWindow: const InfoWindow(title: "Batas Absen Rumah"),
-          //       ),
-          //     },
-          //   ),
-          // ),
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: LatLng(targetLat, targetLng),
+                initialZoom: 17,
+                onTap: (tapPosition, point) {
+                  if (_editMode) setState(() => _pending = point);
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.app_absen', // samakan dengan applicationId app lu
+                ),
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _shownTarget,
+                      radius: maxRadius,
+                      useRadiusInMeter: true,
+                      color: ((_editMode || _isInRange) ? primary : errorRed).withOpacity(0.15),
+                      borderColor: (_editMode || _isInRange) ? primary : errorRed,
+                      borderStrokeWidth: 2,
+                    ),
+                  ],
+                ),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: _shownTarget,
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.topCenter,
+                      child: Icon(Icons.location_on, color: errorRed, size: 44),
+                    ),
+                    if (_currentPosition != null)
+                      Marker(
+                        point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                        width: 22,
+                        height: 22,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1A73E8),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 4)],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Atribusi wajib OpenStreetMap
+          Positioned(
+            top: 96, left: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.8), borderRadius: BorderRadius.circular(4)),
+              child: const Text("© OpenStreetMap contributors", style: TextStyle(fontSize: 10)),
+            ),
+          ),
 
           Positioned(
             top: 100, right: 20,
             child: FloatingActionButton(
-              mini: true, backgroundColor: Colors.white, foregroundColor: onSurface,
+              heroTag: 'my_location_fab', mini: true, backgroundColor: Colors.white, foregroundColor: onSurface,
               onPressed: _checkLocation, child: const Icon(Icons.my_location),
             ),
           ),
 
+          if (_isAdmin && !_editMode)
+            Positioned(
+              top: 150, right: 20,
+              child: FloatingActionButton(
+                heroTag: 'edit_target_fab',
+                mini: true, backgroundColor: Colors.white, foregroundColor: primary,
+                tooltip: 'Ubah titik absen',
+                onPressed: () => setState(() { _editMode = true; _pending = null; }),
+                child: const Icon(Icons.edit_location_alt),
+              ),
+            ),
+
+          if (_editMode)
+            Positioned(
+              top: 100, left: 20, right: 80,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(12)),
+                child: const Text("Mode ubah titik: ketuk peta untuk memilih lokasi", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+            ),
+
+          if (_editMode) _buildEditCard(),
+
+          if (!_editMode)
           Positioned(
             bottom: 32, left: 20, right: 20,
             child: Column(

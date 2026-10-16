@@ -106,7 +106,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Future<void> _fetchProfileData() async {
     try {
       final supabase = Supabase.instance.client;
-      final response = await supabase.from('profiles').select('display_name, avatar_url').limit(1).single();
+      final response = await supabase.from('profiles').select('display_name, avatar_url').eq('id', supabase.auth.currentUser?.id ?? '').single();
 
       if (mounted) {
         setState(() {

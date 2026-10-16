@@ -65,7 +65,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final response = await supabase
           .from('profiles')
           .select()
-          .limit(1)
+          .eq('id', supabase.auth.currentUser?.id ?? '')
           .single();
 
       setState(() {
@@ -687,7 +687,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             SizedBox(
               width: double.infinity, height: 56,
               child: ElevatedButton.icon(
-                onPressed: () {
+                onPressed: () async {
+                  try {
+                    await Supabase.instance.client.auth.signOut();
+                  } catch (_) {}
+                  if (!mounted) return;
                   Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(builder: (context) => const LoginScreen()),
                     (Route<dynamic> route) => false,

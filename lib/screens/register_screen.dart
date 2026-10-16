@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'animated_button_wrapper.dart'; // <--- TAMBAHKAN INI
+import 'main_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({Key? key}) : super(key: key);
@@ -11,6 +13,101 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   bool _showPwd = false;
   bool _showConfirmPwd = false;
+  bool _loading = false;
+
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _idCtrl = TextEditingController();
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _phoneCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
+  final TextEditingController _confirmCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _idCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    _passCtrl.dispose();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  void _showMsg(String msg, {bool error = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: error ? const Color(0xFFBA1A1A) : null),
+    );
+  }
+
+  Future<void> _handleRegister() async {
+    final name = _nameCtrl.text.trim();
+    final studentId = _idCtrl.text.trim();
+    final email = _emailCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    final pass = _passCtrl.text;
+    final confirm = _confirmCtrl.text;
+
+    if (name.isEmpty || studentId.isEmpty || email.isEmpty || pass.isEmpty) {
+      _showMsg('Nama, ID, email, dan password wajib diisi.');
+      return;
+    }
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      _showMsg('Format email tidak valid.');
+      return;
+    }
+    if (pass.length < 6) {
+      _showMsg('Password minimal 6 karakter.');
+      return;
+    }
+    if (pass != confirm) {
+      _showMsg('Konfirmasi password tidak sama.');
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      // Data tambahan dikirim sebagai metadata; tabel `profiles` diisi otomatis
+      // oleh trigger di database (lihat supabase_auth_setup.sql).
+      final res = await Supabase.instance.client.auth.signUp(
+        email: email,
+        password: pass,
+        data: {
+          'display_name': name,
+          'student_id': studentId,
+          'phone': phone,
+        },
+      );
+      if (!mounted) return;
+
+      if (res.session != null) {
+        // Langsung login -> buka tab Profile supaya bisa daftar wajah.
+        _showMsg('Akun berhasil dibuat! Daftarkan wajah kamu di menu Profile.', error: false);
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const MainScreen(initialIndex: 4)),
+          (Route<dynamic> route) => false,
+        );
+      } else {
+        // Konfirmasi email masih aktif di Supabase.
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Cek email kamu'),
+            content: Text('Link konfirmasi dikirim ke $email. Klik link itu, lalu login.'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+          ),
+        );
+        if (mounted) Navigator.pop(context); // kembali ke Login
+      }
+    } on AuthException catch (e) {
+      final m = e.message.toLowerCase();
+      _showMsg(m.contains('already registered') ? 'Email ini sudah terdaftar.' : e.message);
+    } catch (_) {
+      _showMsg('Gagal terhubung ke server. Cek koneksi internet.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   // Warna Material 3 dari HTML kamu
   final Color surface = const Color(0xFFF8F9FA);
@@ -95,19 +192,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 32),
 
               // --- Form Fields ---
-              _buildTextField(label: "Full Name", hint: "John Doe", icon: Icons.person_outline),
+              _buildTextField(controller: _nameCtrl, label: "Full Name", hint: "John Doe", icon: Icons.person_outline),
               const SizedBox(height: 16),
               
-              _buildTextField(label: "ID Number", hint: "EMP-12345", icon: Icons.badge_outlined),
+              _buildTextField(controller: _idCtrl, label: "ID Number", hint: "EMP-12345", icon: Icons.badge_outlined),
               const SizedBox(height: 16),
               
-              _buildTextField(label: "Email", hint: "john@company.com", icon: Icons.mail_outline, keyboardType: TextInputType.emailAddress),
+              _buildTextField(controller: _emailCtrl, label: "Email", hint: "john@company.com", icon: Icons.mail_outline, keyboardType: TextInputType.emailAddress),
               const SizedBox(height: 16),
               
-              _buildTextField(label: "Phone", hint: "+1 (555) 000-0000", icon: Icons.call_outlined, keyboardType: TextInputType.phone),
+              _buildTextField(controller: _phoneCtrl, label: "Phone", hint: "+1 (555) 000-0000", icon: Icons.call_outlined, keyboardType: TextInputType.phone),
               const SizedBox(height: 16),
               
               _buildTextField(
+                controller: _passCtrl,
                 label: "Password", 
                 hint: "••••••••", 
                 icon: Icons.lock_outline, 
@@ -118,6 +216,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 16),
               
               _buildTextField(
+                controller: _confirmCtrl,
                 label: "Confirm Password", 
                 hint: "••••••••", 
                 icon: Icons.lock_reset_outlined, 
@@ -132,18 +231,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () {
-                    print("Tombol Register Ditekan!");
-                  },
+                  onPressed: _loading ? null : _handleRegister,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primary,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     elevation: 2,
                   ),
-                  child: const Text(
-                    "Register",
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
+                  child: _loading
+                      ? const SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                        )
+                      : const Text(
+                          "Register",
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
                 ),
               ),
               const SizedBox(height: 24),
@@ -172,6 +275,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // Helper Widget untuk TextField yang rapi
   Widget _buildTextField({
+    required TextEditingController controller,
     required String label,
     required String hint,
     required IconData icon,
@@ -188,6 +292,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: onSurfaceVariant)),
         ),
         TextField(
+          controller: controller,
           obscureText: obscure,
           keyboardType: keyboardType,
           style: TextStyle(color: onSurface, fontSize: 16),

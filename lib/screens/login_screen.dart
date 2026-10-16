@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'register_screen.dart'; // Pastikan file ini sudah kamu buat
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'main_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -11,8 +12,16 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _showPwd = false;
-  bool _remember = false;
   bool _loading = false;
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
 
   // Warna yang diekstrak dari desain HTML kamu
   final Color surface = const Color(0xFFF8F9FA);
@@ -26,45 +35,64 @@ class _LoginScreenState extends State<LoginScreen> {
   final Color outline = const Color(0xFF727785);
   final Color outlineVariant = const Color(0xFFC1C6D6);
 
-  void _handleLogin() {
-    setState(() => _loading = true);
-    
-    Future.delayed(const Duration(milliseconds: 1500), () {
-  if (mounted) {
-    setState(() => _loading = false);
-    
-    // GANTI DENGAN PAGE_ROUTE_BUILDER UNTUK ANIMASI PREMIUM
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) => const MainScreen(),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          
-          // Animasi Muncul dari Bawah (Slide Up)
-          var begin = const Offset(0.0, 0.05); // Mulai sedikit dari bawah
-          var end = Offset.zero; // Berhenti di posisi asli
-          var curve = Curves.easeOutQuart; // Gerakan melambat elegan
-
-          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-          var offsetAnimation = animation.drive(tween);
-
-          // Animasi Memudar (Fade)
-          var fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-            CurvedAnimation(parent: animation, curve: Curves.easeIn),
-          );
-
-          return FadeTransition(
-            opacity: fadeAnimation,
-            child: SlideTransition(
-              position: offsetAnimation,
-              child: child,
-            ),
-          );
-        },
-        transitionDuration: const Duration(milliseconds: 700), // Sedikit dilamain biar berasa premium
-      ),
+  void _showMsg(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: const Color(0xFFBA1A1A)),
     );
   }
-});
+
+  String _authMessage(AuthException e) {
+    final m = e.message.toLowerCase();
+    if (m.contains('invalid login credentials')) return 'Email atau password salah.';
+    if (m.contains('email not confirmed')) return 'Email belum dikonfirmasi. Cek inbox email kamu.';
+    if (m.contains('too many requests') || m.contains('rate limit')) return 'Terlalu banyak percobaan. Coba lagi sebentar.';
+    return e.message;
+  }
+
+  Future<void> _handleLogin() async {
+    final email = _emailCtrl.text.trim();
+    final pass = _passCtrl.text;
+
+    if (email.isEmpty || pass.isEmpty) {
+      _showMsg('Email dan password wajib diisi.');
+      return;
+    }
+    if (!email.contains('@')) {
+      _showMsg('Format email tidak valid.');
+      return;
+    }
+
+    setState(() => _loading = true);
+    try {
+      await Supabase.instance.client.auth.signInWithPassword(email: email, password: pass);
+      if (!mounted) return;
+
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) => const MainScreen(),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            // Animasi muncul dari bawah (slide up) + fade
+            var tween = Tween(begin: const Offset(0.0, 0.05), end: Offset.zero)
+                .chain(CurveTween(curve: Curves.easeOutQuart));
+            var fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeIn),
+            );
+            return FadeTransition(
+              opacity: fadeAnimation,
+              child: SlideTransition(position: animation.drive(tween), child: child),
+            );
+          },
+          transitionDuration: const Duration(milliseconds: 700),
+        ),
+      );
+    } on AuthException catch (e) {
+      _showMsg(_authMessage(e));
+    } catch (_) {
+      _showMsg('Gagal terhubung ke server. Cek koneksi internet.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -147,8 +175,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       // Input Email
                       _buildLabel("Email"),
                       _buildTextField(
+                        controller: _emailCtrl,
                         hint: "name@company.com",
                         icon: Icons.mail_outline,
+                        keyboardType: TextInputType.emailAddress,
                       ),
                       const SizedBox(height: 16),
 
@@ -168,36 +198,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                       _buildTextField(
+                        controller: _passCtrl,
                         hint: "••••••••",
                         icon: Icons.lock_outline,
                         obscure: !_showPwd,
                         isPassword: true,
+                        onSubmitted: (_) => _loading ? null : _handleLogin(),
                       ),
                       const SizedBox(height: 12),
 
-                      // Remember Me Checkbox
-                      Row(
-                        children: [
-                          SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: Checkbox(
-                              value: _remember,
-                              onChanged: (val) => setState(() => _remember = val!),
-                              activeColor: primary,
-                              side: BorderSide(color: outlineVariant),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(4)
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            "Remember me", 
-                            style: TextStyle(fontSize: 14, color: onSurfaceVariant)
-                          ),
-                        ],
-                      ),
                       const SizedBox(height: 24),
 
                       // Tombol Login dengan Gradien
@@ -366,12 +375,18 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // Widget Helper untuk TextField
   Widget _buildTextField({
+    required TextEditingController controller,
     required String hint, 
     required IconData icon, 
     bool obscure = false, 
-    bool isPassword = false
+    bool isPassword = false,
+    TextInputType keyboardType = TextInputType.text,
+    ValueChanged<String>? onSubmitted,
   }) {
     return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      onSubmitted: onSubmitted,
       obscureText: obscure,
       style: TextStyle(color: onSurface, fontSize: 14),
       decoration: InputDecoration(

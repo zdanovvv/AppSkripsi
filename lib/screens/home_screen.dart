@@ -45,11 +45,11 @@ class HomeScreenState extends State<HomeScreen> {
       final supabase = Supabase.instance.client;
       final sessionUserId = supabase.auth.currentUser?.id;
 
-      // FIX PROFILE: Menggunakan .limit(1) agar tidak bergantung pada sesi login auth saat testing
+      // Profil milik user yang sedang login (Supabase Auth).
       final profileResponse = await supabase
           .from('profiles')
           .select('id, display_name, avatar_url')
-          .limit(1)
+          .eq('id', sessionUserId ?? '')
           .maybeSingle();
 
       String activeUserId = sessionUserId ?? '';

@@ -32,8 +32,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<void> _loadCurrentProfile() async {
     try {
       final supabase = Supabase.instance.client;
-      // Narik data user yang pertama
-      final response = await supabase.from('profiles').select().limit(1).single();
+      // Data user yang sedang login
+      final response = await supabase.from('profiles').select().eq('id', supabase.auth.currentUser?.id ?? '').single();
       
       setState(() {
         _userDbId = response['id'] ?? '';

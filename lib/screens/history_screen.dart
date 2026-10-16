@@ -49,7 +49,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final response = await supabase
           .from('profiles')
           .select('display_name, avatar_url')
-          .limit(1)
+          .eq('id', supabase.auth.currentUser?.id ?? '')
           .single();
 
       if (mounted) {
