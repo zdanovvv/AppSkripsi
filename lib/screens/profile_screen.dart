@@ -1,9 +1,12 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'; 
 import 'package:image_picker/image_picker.dart'; 
 import 'settings_screen.dart'; 
 import 'login_screen.dart'; 
 import 'edit_profile_screen.dart'; // IMPORT HALAMAN EDIT PROFILE BARU
+import '../utils/face_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -38,9 +41,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _avatarUrl = ''; // TAMBAHAN UNTUK NAMPUNG LINK FOTO
   
   // State untuk Face Recognition
-  int _registeredFacesCount = 0; 
-  final int _maxFaces = 3; 
-  final int _minFaces = 1; 
+  int _registeredFacesCount = 0; // hanya hitung embedding yang VALID
+  final int _maxFaces = FaceService.maxFaces;
+  final int _minFaces = FaceService.minFaces;
+  List<Map<String, dynamic>> _faces = []; // semua entri face_embeddings (termasuk data lama)
 
   // State untuk switch 2FA
   bool _is2faEnabled = true;
@@ -79,11 +83,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
 
         final rawEmbeddings = response['face_embeddings'];
-        if (rawEmbeddings is List) {
-          _registeredFacesCount = rawEmbeddings.length;
-        } else {
-          _registeredFacesCount = 0;
-        }
+        _faces = rawEmbeddings is List
+            ? rawEmbeddings.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+            : [];
+        _registeredFacesCount = _faces.where(_isValidFace).length;
       });
     } catch (e) {
       print("ERROR SUPABASE: $e");
@@ -96,12 +99,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final XFile? image = await _picker.pickImage(
         source: source,
         preferredCameraDevice: CameraDevice.front,
-        imageQuality: 80,
+        imageQuality: 90,
+        maxWidth: 1024,
+        maxHeight: 1024,
       );
 
       if (image != null) {
         setState(() => _isUploadingFace = true);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Memproses wajah (Ekstraksi Embedding)...")));
+
+        // Ekstraksi embedding SUNGGUHAN (deteksi wajah -> crop -> MobileNet TFLite).
+        final capture = await FaceService.instance.embedFromFile(image.path);
+        if (capture == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text("Wajah tidak terdeteksi atau terlalu kecil. Foto lebih dekat & menghadap kamera."),
+              backgroundColor: Colors.red,
+            ));
+          }
+          return; // finally di bawah menutup loading
+        }
 
         final supabase = Supabase.instance.client;
 
@@ -115,7 +132,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           currentEmbeddings.add({
             "timestamp": DateTime.now().toIso8601String(),
-            "data": "simulated_embedding_vector_data" 
+            "model": FaceService.modelVersion, // embedding beda versi dianggap data lama
+            "data": capture.embedding, // List<double> ter-normalisasi L2
+            "thumb": capture.thumbBase64, // thumbnail JPEG kecil untuk ditampilkan
+            "sharpness": double.parse(capture.sharpness.toStringAsFixed(1)),
           });
 
           await supabase
@@ -123,10 +143,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
               .update({'face_embeddings': currentEmbeddings})
               .eq('id', _userDbId);
           
-          setState(() {
-            _registeredFacesCount = currentEmbeddings.length;
-          });
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Wajah berhasil diregistrasi! ($_registeredFacesCount/$_maxFaces)")));
+          _applyFaces(currentEmbeddings);
+          if (mounted) {
+            final blurry = capture.sharpness < FaceService.blurThreshold;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(blurry
+                  ? "Tersimpan ($_registeredFacesCount/$_maxFaces), tapi fotonya terlihat buram. Hapus & ulangi kalau perlu."
+                  : "Wajah berhasil diregistrasi! ($_registeredFacesCount/$_maxFaces)"),
+              backgroundColor: blurry ? Colors.orange : null,
+            ));
+          }
         }
       }
     } catch (e) {
@@ -134,6 +160,137 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } finally {
       setState(() => _isUploadingFace = false);
     }
+  }
+
+  bool _isValidFace(Map<String, dynamic> m) {
+    final d = m['data'];
+    return m['model'] == FaceService.modelVersion && d is List && d.isNotEmpty && d.first is num;
+  }
+
+  void _applyFaces(List<dynamic> raw) {
+    final list = raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    setState(() {
+      _faces = list;
+      _registeredFacesCount = list.where(_isValidFace).length;
+    });
+  }
+
+  // Hapus satu foto wajah (dikenali lewat timestamp-nya).
+  Future<void> _deleteFace(String id) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Hapus foto wajah?"),
+        content: const Text("Foto ini tidak akan dipakai lagi untuk verifikasi."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Batal")),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Hapus", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || _userDbId.isEmpty) return;
+
+    setState(() => _isUploadingFace = true);
+    try {
+      final supabase = Supabase.instance.client;
+      final row = await supabase.from('profiles').select('face_embeddings').eq('id', _userDbId).single();
+      final list = row['face_embeddings'] is List
+          ? List<dynamic>.from(row['face_embeddings'])
+          : <dynamic>[];
+      list.removeWhere((e) => e is Map && e['timestamp']?.toString() == id);
+      await supabase.from('profiles').update({'face_embeddings': list}).eq('id', _userDbId);
+      if (mounted) {
+        _applyFaces(list);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Foto dihapus ($_registeredFacesCount/$_maxFaces)")),
+        );
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Gagal menghapus: $e")));
+    } finally {
+      if (mounted) setState(() => _isUploadingFace = false);
+    }
+  }
+
+  Uint8List? _decodeThumb(dynamic thumb) {
+    if (thumb is! String || thumb.isEmpty) return null;
+    try {
+      return base64Decode(thumb);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _buildFaceGrid() {
+    if (_faces.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: _faces.map((f) {
+          final valid = _isValidFace(f);
+          final id = f['timestamp']?.toString() ?? '';
+          final sharp = f['sharpness'] is num ? (f['sharpness'] as num).toDouble() : null;
+          final blurry = valid && sharp != null && sharp < FaceService.blurThreshold;
+          final bytes = valid ? _decodeThumb(f['thumb']) : null;
+
+          Widget content;
+          if (!valid) {
+            content = Container(
+              color: errorContainer,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: onErrorContainer, size: 22),
+                  const SizedBox(height: 2),
+                  Text("Data lama", style: TextStyle(fontSize: 9, color: onErrorContainer)),
+                ],
+              ),
+            );
+          } else if (bytes != null) {
+            content = Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true);
+          } else {
+            content = Container(color: surfaceContainer, child: Icon(Icons.face, color: onSurfaceVariant));
+          }
+
+          return SizedBox(
+            width: 72,
+            height: 72,
+            child: Stack(
+              children: [
+                Positioned.fill(child: ClipRRect(borderRadius: BorderRadius.circular(12), child: content)),
+                if (blurry)
+                  Positioned(
+                    left: 4,
+                    bottom: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(6)),
+                      child: const Text("Buram", style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: GestureDetector(
+                    onTap: _isUploadingFace ? null : () => _deleteFace(id),
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                      child: const Icon(Icons.close, size: 13, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
   }
 
   void _showImageSourceDialog(BuildContext context) {
@@ -383,7 +540,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ],
                         ),
                         const SizedBox(height: 20),
-                        
+                        _buildFaceGrid(),
+                        Text("Saran: ${FaceService.recommendedFaces} foto dengan variasi cahaya & sudut (lurus, sedikit menoleh, dengan/tanpa kacamata). Hapus foto yang buram.", style: TextStyle(fontSize: 12, color: onSurfaceVariant)),
+                        const SizedBox(height: 12),
                         if (_registeredFacesCount < _maxFaces)
                           SizedBox(
                             width: double.infinity,

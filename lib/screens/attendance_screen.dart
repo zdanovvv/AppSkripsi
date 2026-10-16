@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'dart:io'; 
 import 'package:camera/camera.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:supabase_flutter/supabase_flutter.dart'; 
 import 'gps_screen.dart';
 import 'settings_screen.dart';
+import '../utils/face_service.dart';
+import '../utils/face_utils.dart';
 
 class AttendanceScreen extends StatefulWidget {
   final bool isActive; 
@@ -21,7 +22,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   bool _isScanning = false;
   
   CameraController? _cameraController;
-  Interpreter? _interpreter;
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableContours: false,
@@ -31,12 +31,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerPr
   );
   
   bool _isDetecting = false;
-  double _aiMatchScore = 0.0;
-  bool _isFaceDetected = false; 
+  double _aiMatchScore = 0.0; // cosine similarity ASLI x 100 (bukan probabilitas)
+  bool _isFaceDetected = false;
 
-  int _faceDetectedFrames = 0; 
-  bool _isScoreLocked = false; 
+  int _faceDetectedFrames = 0;
+  bool _isScoreLocked = false; // true = proses verifikasi selesai (cocok / tidak cocok)
+  bool _isMatch = false; // true = wajah cocok dengan data terdaftar
   double _finalLockedScore = 0.0;
+
+  List<List<double>> _enrolled = []; // embedding wajah terdaftar milik user
+  bool _enrolledLoaded = false;
+  final List<List<double>> _samples = []; // embedding dari beberapa frame berturut-turut
+  static const int _warmupFrames = 8; // frame stabil sebelum mulai ambil sampel
+  static const int _samplesNeeded = 3; // jumlah sampel yang dirata-rata
+
+  Color get _stateColor => _isScoreLocked
+      ? (_isMatch ? Colors.green : Colors.red)
+      : (_isFaceDetected ? Colors.orange : primary);
 
   final Color surface = const Color(0xFFF8F9FA);
   final Color surfaceContainerHighest = const Color(0xFFE1E3E4);
@@ -76,6 +87,8 @@ void initState() {
 
   Future<void> _stopCamera() async {
     _isDetecting = true;
+    _samples.clear();
+    _isMatch = false;
     final controller = _cameraController;
     _cameraController = null;
     try {
@@ -125,12 +138,12 @@ void initState() {
     // Bersihkan sisa controller/interpreter sebelumnya supaya tidak bocor.
     await _stopCamera();
     _isDetecting = false; // _stopCamera mengisi true; tanpa reset deteksi mati setelah pindah tab
-    _interpreter?.close();
-    _interpreter = null;
-
     try {
-      _interpreter = await Interpreter.fromAsset('assets/model_face_recognition.tflite');
-    } catch (_) {}
+      await FaceService.instance.load();
+      await _loadEnrolled();
+    } catch (e) {
+      debugPrint("Gagal load model / embedding: $e");
+    }
 
     try {
       final cameras = await availableCameras();
@@ -168,11 +181,80 @@ void initState() {
     }
   }
 
+  // Ambil embedding wajah terdaftar milik user dari Supabase (kolom JSONB face_embeddings).
+  // Login app ini belum pakai Supabase Auth, jadi fallback ke profil pertama
+  // (sama seperti layar Profile, supaya registrasi & verifikasi menunjuk profil yang sama).
+  Future<void> _loadEnrolled() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final uid = supabase.auth.currentUser?.id;
+      final query = supabase.from('profiles').select('face_embeddings');
+      final row = uid != null
+          ? await query.eq('id', uid).maybeSingle()
+          : await query.limit(1).maybeSingle();
+      final list = FaceService.parseEnrolled(row?['face_embeddings']);
+      debugPrint("Embedding terdaftar: ${list.length}");
+      if (mounted) {
+        setState(() {
+          _enrolled = list;
+          _enrolledLoaded = true;
+        });
+      }
+    } catch (e) {
+      debugPrint("Gagal ambil embedding: $e");
+      if (mounted) setState(() => _enrolledLoaded = true);
+    }
+  }
+
+  void _resetVerification() {
+    _samples.clear();
+    if (!mounted) return;
+    setState(() {
+      _isScoreLocked = false;
+      _isMatch = false;
+      _faceDetectedFrames = 0;
+      _aiMatchScore = 0.0;
+    });
+  }
+
+  void _finishVerification() {
+    if (_samples.isEmpty) return;
+    final dim = _samples.first.length;
+    final mean = List<double>.filled(dim, 0.0);
+    for (final s in _samples) {
+      for (int i = 0; i < dim; i++) {
+        mean[i] += s[i];
+      }
+    }
+    final sim = FaceService.bestSimilarity(l2Normalize(mean), _enrolled);
+    final match = sim >= FaceService.threshold;
+    debugPrint("VERIFIKASI: similarity=${sim.toStringAsFixed(4)} threshold=${FaceService.threshold} match=$match");
+    _samples.clear();
+
+    if (!mounted) return;
+    setState(() {
+      _finalLockedScore = (sim * 100).clamp(0, 100).toDouble();
+      _aiMatchScore = _finalLockedScore;
+      _isMatch = match;
+      _isScoreLocked = true;
+    });
+
+    // Kalau tidak cocok, otomatis coba scan lagi setelah 2 detik.
+    if (!match) {
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted && _isScoreLocked && !_isMatch) _resetVerification();
+      });
+    }
+  }
+
   Future<void> _processCameraFrame(CameraImage image) async {
-    if (_interpreter == null || !widget.isActive) {
+    // Belum siap / tidak ada wajah terdaftar / hasil sudah final -> lewati frame.
+    if (!widget.isActive || !FaceService.instance.isLoaded || _enrolled.length < FaceService.minFaces || _isScoreLocked) {
       _isDetecting = false;
       return;
     }
+
+    final int sensor = _cameraController?.description.sensorOrientation ?? 0;
 
     try {
       final inputImage = _convertCameraImageToInputImage(image);
@@ -184,39 +266,40 @@ void initState() {
       final faces = await _faceDetector.processImage(inputImage);
 
       if (faces.isEmpty) {
+        _samples.clear();
         if (mounted) {
           setState(() {
             _aiMatchScore = 0.0;
-            _isFaceDetected = false; 
-            _faceDetectedFrames = 0; 
-            _isScoreLocked = false;
+            _isFaceDetected = false;
+            _faceDetectedFrames = 0;
           });
         }
         _isDetecting = false;
         return;
       }
 
+      // Pakai wajah terbesar di frame.
+      final face = faces.reduce((a, b) =>
+          a.boundingBox.width * a.boundingBox.height >= b.boundingBox.width * b.boundingBox.height ? a : b);
+
       if (mounted) {
         setState(() {
-          _isFaceDetected = true; 
-          _faceDetectedFrames++; 
+          _isFaceDetected = true;
+          _faceDetectedFrames++;
         });
-
-        if (!_isScoreLocked) {
-          if (_faceDetectedFrames < 15) {
-            setState(() {
-              _aiMatchScore = 72.0 + (DateTime.now().millisecond % 12); 
-            });
-          } else {
-            setState(() {
-              _isScoreLocked = true;
-              _finalLockedScore = 88.0 + (DateTime.now().millisecond % 4) + 0.4;
-              _aiMatchScore = _finalLockedScore;
-            });
-          }
-        }
       }
 
+      // Tunggu wajah stabil beberapa frame, lalu ambil embedding sungguhan dari model.
+      if (_faceDetectedFrames >= _warmupFrames) {
+        final emb = FaceService.instance.embedFromCameraImage(image, face, sensor);
+        if (emb != null) {
+          _samples.add(emb);
+          final live = FaceService.bestSimilarity(emb, _enrolled);
+          debugPrint("sample sim=${live.toStringAsFixed(4)}");
+          if (mounted) setState(() => _aiMatchScore = (live * 100).clamp(0, 100).toDouble());
+          if (_samples.length >= _samplesNeeded) _finishVerification();
+        }
+      }
     } catch (e) {
       debugPrint("Gagal proses AI: $e");
     }
@@ -258,8 +341,6 @@ void dispose() {
   _isDetecting = true; // hentikan pemrosesan frame baru
   final controller = _cameraController;
   _cameraController = null;
-  final interpreter = _interpreter;
-  _interpreter = null;
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
       if (controller != null) {
@@ -271,7 +352,6 @@ void dispose() {
     } catch (_) {}
     // Detector & interpreter ditutup SETELAH stream berhenti, agar tidak dipakai saat frame diproses.
     try { await _faceDetector.close(); } catch (_) {}
-    try { interpreter?.close(); } catch (_) {}
   });
   _scanController.dispose();
   super.dispose();
@@ -280,6 +360,13 @@ void dispose() {
   // LOGIKA AMAN TOMBOL JEP RET MANUAL
   // LOGIKA AMAN TOMBOL JEP RET MANUAL (ANTI FREEZE)
   void _onCapture() async {
+  if (_enrolledLoaded && _enrolled.length < FaceService.minFaces) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Wajah terdaftar ${_enrolled.length}/${FaceService.minFaces}. Tambah foto wajah dulu di menu Profil."), backgroundColor: Colors.red),
+    );
+    return;
+  }
+
   if (!_isFaceDetected) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Wajah belum terdeteksi!"), backgroundColor: Colors.red),
@@ -290,6 +377,13 @@ void dispose() {
   if (!_isScoreLocked) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Mohon stabilkan wajah sebentar..."), backgroundColor: Colors.orange),
+    );
+    return;
+  }
+
+  if (!_isMatch) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Wajah tidak cocok dengan data terdaftar."), backgroundColor: Colors.red),
     );
     return;
   }
@@ -319,20 +413,32 @@ void dispose() {
 
   // LOGIKA TEXT DUA KONDISI SESUAI PERMINTAAN KAMU
   Widget _buildDynamicInstructionText() {
+    if (_enrolledLoaded && _enrolled.length < FaceService.minFaces) {
+      return Text(
+        "Wajah terdaftar ${_enrolled.length}/${FaceService.minFaces}. Tambah foto di menu Profil.",
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 14, color: Colors.red, fontWeight: FontWeight.bold),
+      );
+    }
     if (!_isFaceDetected) {
       return Text(
         "Tempatkan wajah di dalam frame kamera.",
         style: TextStyle(fontSize: 14, color: onSurfaceVariant, fontWeight: FontWeight.normal),
       );
     } else if (!_isScoreLocked) {
-      return Text(
-        "Mohon tunggu, AI sedang memindai wajah...",
-        style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold),
+      return const Text(
+        "Mohon tunggu, AI sedang memverifikasi wajah...",
+        style: TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold),
+      );
+    } else if (_isMatch) {
+      return const Text(
+        "Wajah terverifikasi! Silakan tekan tombol sidik jari.",
+        style: TextStyle(fontSize: 14, color: Colors.green, fontWeight: FontWeight.bold),
       );
     } else {
-      return Text(
-        "Pemindaian selesai! Silakan tekan tombol sidik jari.",
-        style: const TextStyle(fontSize: 14, color: Colors.green, fontWeight: FontWeight.bold),
+      return const Text(
+        "Wajah tidak cocok. Mencoba lagi...",
+        style: TextStyle(fontSize: 14, color: Colors.red, fontWeight: FontWeight.bold),
       );
     }
   }
@@ -402,7 +508,7 @@ void dispose() {
                               top: 16, bottom: 16, left: 16, right: 16,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: _isScoreLocked ? Colors.green.withOpacity(0.8) : (_isFaceDetected ? Colors.orange.withOpacity(0.6) : primary.withOpacity(0.4)), width: 2), 
+                                  border: Border.all(color: _stateColor.withOpacity(_isFaceDetected ? 0.8 : 0.4), width: 2), 
                                   borderRadius: BorderRadius.circular(24)
                                 ),
                               ),
@@ -415,12 +521,12 @@ void dispose() {
                                 children: [
                                   _buildGlassPill(child: Row(
                                     children: [
-                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary), shape: BoxShape.circle)),
+                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _stateColor, shape: BoxShape.circle)),
                                       const SizedBox(width: 8),
-                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? "Face Verified!" : (_isFaceDetected ? "Analyzing..." : "Scanning..."))),
+                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? (_isMatch ? "Face Verified!" : "Not Matched") : (_isFaceDetected ? "Analyzing..." : "Scanning..."))),
                                     ],
                                   )),
-                                  _buildGlassPill(child: Text("Match: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary)))),
+                                  _buildGlassPill(child: Text("Similarity: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _stateColor))),
                                 ],
                               ),
                             ),
@@ -440,10 +546,10 @@ void dispose() {
                 duration: const Duration(milliseconds: 200),
                 width: 80, height: 80,
                 decoration: BoxDecoration(
-                  color: _isScoreLocked ? Colors.green : primary, 
+                  color: _isMatch ? Colors.green : primary,
                   shape: BoxShape.circle,
                   border: Border.all(color: surface, width: 4),
-                  boxShadow: [BoxShadow(color: _isScoreLocked ? Colors.green.withOpacity(0.4) : primary.withOpacity(0.4), blurRadius: 15)],
+                  boxShadow: [BoxShadow(color: (_isMatch ? Colors.green : primary).withOpacity(0.4), blurRadius: 15)],
                 ),
                 child: _isScanning 
                     ? const Padding(padding: EdgeInsets.all(24.0), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
