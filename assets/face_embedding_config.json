@@ -1,0 +1,17 @@
+{
+  "model_file": "model_face_embedding.tflite",
+  "varian": "Fine-tuned Dense1024",
+  "input_size": 224,
+  "preprocess": "RGB, piksel/127.5 - 1",
+  "embedding_dim": 1024,
+  "l2_normalize": true,
+  "metric": "cosine_similarity",
+  "threshold_eer": 0.6637219786643982,
+  "threshold_far_1persen": 0.8056694269180298,
+  "eer": 0.18658734451054626,
+  "auc": 0.8949412381709261,
+  "akurasi_di_threshold_eer": 0.8134126554894537,
+  "tar_di_far_1persen": 0.27798810167658194,
+  "jumlah_pasangan_sama": 1849,
+  "jumlah_pasangan_berbeda": 1849
+}

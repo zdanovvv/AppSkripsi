@@ -1,0 +1,1226 @@
+diff -ruN a/assets/face_embedding_config.json b/assets/face_embedding_config.json
+--- a/assets/face_embedding_config.json	1970-01-01 07:00:00.000000000 +0700
++++ b/assets/face_embedding_config.json	2026-10-16 07:40:39.586590996 +0700
+@@ -0,0 +1,20 @@
++{
++  "model_file": "model_face_embedding.tflite",
++  "varian": "Fine-tuned Dense1024",
++  "input_size": 224,
++  "preprocess": "RGB, piksel/127.5 - 1",
++  "input_mean": 127.5,
++  "input_std": 127.5,
++  "crop_scale": 2.2,
++  "embedding_dim": 1024,
++  "l2_normalize": true,
++  "metric": "cosine_similarity",
++  "threshold_eer": 0.6637219786643982,
++  "threshold_far_1persen": 0.8056694269180298,
++  "eer": 0.18658734451054626,
++  "auc": 0.8949412381709261,
++  "akurasi_di_threshold_eer": 0.8134126554894537,
++  "tar_di_far_1persen": 0.27798810167658194,
++  "jumlah_pasangan_sama": 1849,
++  "jumlah_pasangan_berbeda": 1849
++}
+\ No newline at end of file
+diff -ruN a/lib/screens/attendance_screen.dart b/lib/screens/attendance_screen.dart
+--- a/lib/screens/attendance_screen.dart	2026-10-16 07:35:31.055997113 +0700
++++ b/lib/screens/attendance_screen.dart	2026-10-16 07:40:39.583759510 +0700
+@@ -1,15 +1,16 @@
+ import 'package:flutter/material.dart';
+ import 'dart:ui';
+-import 'dart:io'; 
++import 'dart:io';
+ import 'package:camera/camera.dart';
+-import 'package:tflite_flutter/tflite_flutter.dart';
+ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+-import 'package:supabase_flutter/supabase_flutter.dart'; 
++import 'package:supabase_flutter/supabase_flutter.dart';
++import '../utils/face_embedder.dart';
++import '../utils/face_store.dart';
+ import 'gps_screen.dart';
+ import 'settings_screen.dart';
+ 
+ class AttendanceScreen extends StatefulWidget {
+-  final bool isActive; 
++  final bool isActive;
+   const AttendanceScreen({Key? key, required this.isActive}) : super(key: key);
+ 
+   @override
+@@ -19,24 +20,29 @@
+ class _AttendanceScreenState extends State<AttendanceScreen> with SingleTickerProviderStateMixin {
+   late AnimationController _scanController;
+   bool _isScanning = false;
+-  
++
+   CameraController? _cameraController;
+-  Interpreter? _interpreter;
++  final FaceEmbedder _embedder = FaceEmbedder.instance;
+   final FaceDetector _faceDetector = FaceDetector(
+     options: FaceDetectorOptions(
+       enableContours: false,
+       enableClassification: false,
+-      performanceMode: FaceDetectorMode.fast, 
++      performanceMode: FaceDetectorMode.fast,
+     ),
+   );
+-  
++
+   bool _isDetecting = false;
+-  double _aiMatchScore = 0.0;
+-  bool _isFaceDetected = false; 
++  double _aiMatchScore = 0.0; // kemiripan cosine x 100 (rata-rata beberapa frame terakhir)
++  bool _isFaceDetected = false;
+ 
+-  int _faceDetectedFrames = 0; 
+-  bool _isScoreLocked = false; 
+-  double _finalLockedScore = 0.0;
++  bool _isScoreLocked = false; // true = wajah cocok dengan data terdaftar
++  bool _isMismatch = false; // wajah terdeteksi tetapi tidak cocok
++  String _hint = '';
++  List<List<double>> _enrolled = [];
++  int _staleFaces = 0;
++  bool _profileLoaded = false;
++  final List<double> _recentSims = [];
++  int _lastEmbedMs = 0;
+ 
+   final Color surface = const Color(0xFFF8F9FA);
+   final Color surfaceContainerHighest = const Color(0xFFE1E3E4);
+@@ -48,6 +54,10 @@
+   String _displayName = 'Zdanov';
+   String _avatarUrl = '';
+ 
++  Color get _statusColor => _isScoreLocked
++      ? Colors.green
++      : (_isMismatch ? Colors.red : (_isFaceDetected ? Colors.orange : primary));
++
+   @override
+ void initState() {
+   super.initState();
+@@ -55,7 +65,7 @@
+     vsync: this,
+     duration: const Duration(seconds: 2),
+   )..repeat(reverse: true);
+-  
++
+   _fetchUserData();
+   if (widget.isActive) {
+     _initCameraAndML();
+@@ -69,13 +79,14 @@
+       if (widget.isActive) {
+         _initCameraAndML();
+       } else {
+-        _stopCamera(); 
++        _stopCamera();
+       }
+     }
+   }
+ 
+   Future<void> _stopCamera() async {
+     _isDetecting = true;
++    _recentSims.clear();
+     final controller = _cameraController;
+     _cameraController = null;
+     try {
+@@ -91,8 +102,9 @@
+         _cameraController = null;
+         _isFaceDetected = false;
+         _aiMatchScore = 0.0;
+-        _faceDetectedFrames = 0;
+         _isScoreLocked = false;
++        _isMismatch = false;
++        _hint = '';
+       });
+     }
+   }
+@@ -116,21 +128,38 @@
+     } catch (_) {}
+   }
+ 
++  // Memuat embedding wajah terdaftar milik user. Dipanggil setiap layar ini aktif,
++  // supaya wajah yang baru didaftarkan di tab Profile langsung terpakai.
++  Future<void> _loadEnrolled() async {
++    try {
++      final profile = await FaceStore.load();
++      if (!mounted) return;
++      setState(() {
++        _enrolled = profile.embeddings;
++        _staleFaces = profile.staleCount;
++        _profileLoaded = true;
++        _hint = '';
++      });
++    } catch (e) {
++      debugPrint("Gagal memuat wajah terdaftar: $e");
++      if (mounted && !_profileLoaded) {
++        setState(() => _hint = "Gagal memuat data wajah. Periksa koneksi dan file model di assets/.");
++      }
++    }
++  }
++
+   bool _isInitializing = false;
+ 
+   Future<void> _initCameraAndML() async {
+     if (_isInitializing) return;
+     _isInitializing = true;
+ 
+-    // Bersihkan sisa controller/interpreter sebelumnya supaya tidak bocor.
++    // Bersihkan sisa controller sebelumnya supaya tidak bocor.
+     await _stopCamera();
+     _isDetecting = false; // _stopCamera mengisi true; tanpa reset deteksi mati setelah pindah tab
+-    _interpreter?.close();
+-    _interpreter = null;
+ 
+-    try {
+-      _interpreter = await Interpreter.fromAsset('assets/model_face_recognition.tflite');
+-    } catch (_) {}
++    // Kamera tetap dinyalakan sementara data wajah dimuat (tanpa await).
++    _loadEnrolled();
+ 
+     try {
+       final cameras = await availableCameras();
+@@ -141,9 +170,9 @@
+ 
+       _cameraController = CameraController(
+         frontCamera,
+-        ResolutionPreset.medium, 
++        ResolutionPreset.medium,
+         enableAudio: false,
+-        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888, 
++        imageFormatGroup: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+       );
+ 
+       final controller = _cameraController!;
+@@ -169,7 +198,7 @@
+   }
+ 
+   Future<void> _processCameraFrame(CameraImage image) async {
+-    if (_interpreter == null || !widget.isActive) {
++    if (!_embedder.isReady || !_profileLoaded || !widget.isActive) {
+       _isDetecting = false;
+       return;
+     }
+@@ -184,39 +213,79 @@
+       final faces = await _faceDetector.processImage(inputImage);
+ 
+       if (faces.isEmpty) {
++        _recentSims.clear();
+         if (mounted) {
+           setState(() {
+             _aiMatchScore = 0.0;
+-            _isFaceDetected = false; 
+-            _faceDetectedFrames = 0; 
++            _isFaceDetected = false;
+             _isScoreLocked = false;
++            _isMismatch = false;
++            _hint = '';
+           });
+         }
+         _isDetecting = false;
+         return;
+       }
+ 
+-      if (mounted) {
+-        setState(() {
+-          _isFaceDetected = true; 
+-          _faceDetectedFrames++; 
+-        });
++      // Pakai wajah terbesar di frame.
++      final face = faces.reduce((a, b) =>
++          a.boundingBox.width * a.boundingBox.height >= b.boundingBox.width * b.boundingBox.height ? a : b);
+ 
+-        if (!_isScoreLocked) {
+-          if (_faceDetectedFrames < 15) {
+-            setState(() {
+-              _aiMatchScore = 72.0 + (DateTime.now().millisecond % 12); 
+-            });
+-          } else {
+-            setState(() {
+-              _isScoreLocked = true;
+-              _finalLockedScore = 88.0 + (DateTime.now().millisecond % 4) + 0.4;
+-              _aiMatchScore = _finalLockedScore;
+-            });
+-          }
++      if (mounted && !_isFaceDetected) {
++        setState(() => _isFaceDetected = true);
++      }
++
++      // Sudah lolos: tunggu tombol ditekan atau wajah hilang. Tanpa data terdaftar: tidak ada yang dibandingkan.
++      if (_isScoreLocked || _enrolled.isEmpty) {
++        _isDetecting = false;
++        return;
++      }
++
++      // Batasi pembuatan embedding (model cukup berat), deteksi wajah tetap jalan tiap frame.
++      final nowMs = DateTime.now().millisecondsSinceEpoch;
++      if (nowMs - _lastEmbedMs < 350) {
++        _isDetecting = false;
++        return;
++      }
++      _lastEmbedMs = nowMs;
++
++      final rotation = _cameraController?.description.sensorOrientation ?? 0;
++      final uprightWidth = (rotation == 90 || rotation == 270) ? image.height : image.width;
++      if (face.boundingBox.width < uprightWidth * 0.2) {
++        _recentSims.clear();
++        if (mounted) {
++          setState(() {
++            _isMismatch = false;
++            _hint = "Dekatkan wajah ke kamera.";
++          });
+         }
++        _isDetecting = false;
++        return;
++      }
++
++      final emb = _embedder.embedCameraFace(image, face.boundingBox, rotation);
++      if (emb == null) {
++        _isDetecting = false; // format frame kamera tidak didukung
++        return;
+       }
++      final sim = FaceStore.bestMatch(emb, _enrolled);
++
++      // Rata-rata beberapa frame terakhir supaya keputusan tidak goyah oleh satu frame jelek.
++      _recentSims.add(sim);
++      if (_recentSims.length > 5) _recentSims.removeAt(0);
++      final avg = _recentSims.reduce((a, b) => a + b) / _recentSims.length;
++      final decided = _recentSims.length >= 4;
+ 
++      if (mounted) {
++        setState(() {
++          _hint = '';
++          _aiMatchScore = (avg * 100).clamp(0.0, 100.0).toDouble();
++          if (decided) {
++            _isScoreLocked = avg >= _embedder.threshold;
++            _isMismatch = !_isScoreLocked;
++          }
++        });
++      }
+     } catch (e) {
+       debugPrint("Gagal proses AI: $e");
+     }
+@@ -226,10 +295,10 @@
+ 
+   InputImage? _convertCameraImageToInputImage(CameraImage image) {
+     if (_cameraController == null) return null;
+-    
++
+     final camera = _cameraController!.description;
+     final sensorOrientation = camera.sensorOrientation;
+-    
++
+     InputImageRotation? rotation;
+     if (sensorOrientation == 90) rotation = InputImageRotation.rotation90deg;
+     else if (sensorOrientation == 180) rotation = InputImageRotation.rotation180deg;
+@@ -243,7 +312,7 @@
+     final bytes = image.planes[0].bytes;
+ 
+     return InputImage.fromBytes(
+-      bytes: bytes, 
++      bytes: bytes,
+       metadata: InputImageMetadata(
+         size: Size(image.width.toDouble(), image.height.toDouble()),
+         rotation: rotation,
+@@ -258,8 +327,6 @@
+   _isDetecting = true; // hentikan pemrosesan frame baru
+   final controller = _cameraController;
+   _cameraController = null;
+-  final interpreter = _interpreter;
+-  _interpreter = null;
+   WidgetsBinding.instance.addPostFrameCallback((_) async {
+     try {
+       if (controller != null) {
+@@ -269,9 +336,9 @@
+         await controller.dispose();
+       }
+     } catch (_) {}
+-    // Detector & interpreter ditutup SETELAH stream berhenti, agar tidak dipakai saat frame diproses.
++    // Detector ditutup SETELAH stream berhenti, agar tidak dipakai saat frame diproses.
++    // (Model embedding adalah singleton bersama, sengaja tidak ditutup di sini.)
+     try { await _faceDetector.close(); } catch (_) {}
+-    try { interpreter?.close(); } catch (_) {}
+   });
+   _scanController.dispose();
+   super.dispose();
+@@ -288,8 +355,14 @@
+   }
+ 
+   if (!_isScoreLocked) {
++    final msg = _enrolled.isEmpty
++        ? "Belum ada wajah terdaftar. Daftarkan wajah di tab Profile."
++        : (_isMismatch ? "Wajah tidak cocok dengan data terdaftar." : "Mohon stabilkan wajah sebentar...");
+     ScaffoldMessenger.of(context).showSnackBar(
+-      const SnackBar(content: Text("Mohon stabilkan wajah sebentar..."), backgroundColor: Colors.orange),
++      SnackBar(
++        content: Text(msg),
++        backgroundColor: (_isMismatch || _enrolled.isEmpty) ? Colors.red : Colors.orange,
++      ),
+     );
+     return;
+   }
+@@ -317,24 +390,48 @@
+   }
+ }
+ 
+-  // LOGIKA TEXT DUA KONDISI SESUAI PERMINTAAN KAMU
+   Widget _buildDynamicInstructionText() {
+-    if (!_isFaceDetected) {
+-      return Text(
+-        "Tempatkan wajah di dalam frame kamera.",
+-        style: TextStyle(fontSize: 14, color: onSurfaceVariant, fontWeight: FontWeight.normal),
+-      );
+-    } else if (!_isScoreLocked) {
+-      return Text(
+-        "Mohon tunggu, AI sedang memindai wajah...",
+-        style: const TextStyle(fontSize: 14, color: Colors.orange, fontWeight: FontWeight.bold),
+-      );
++    String text;
++    Color color = onSurfaceVariant;
++    FontWeight weight = FontWeight.normal;
++
++    if (!_profileLoaded) {
++      text = _hint.isNotEmpty ? _hint : "Memuat data wajah...";
++      if (_hint.isNotEmpty) {
++        color = Colors.red;
++        weight = FontWeight.bold;
++      }
++    } else if (_enrolled.isEmpty) {
++      text = _staleFaces > 0
++          ? "Data wajah lama tidak kompatibel dengan model saat ini. Daftar ulang di tab Profile."
++          : "Belum ada wajah terdaftar. Daftarkan wajah di tab Profile.";
++      color = Colors.red;
++      weight = FontWeight.bold;
++    } else if (_hint.isNotEmpty) {
++      text = _hint;
++      color = Colors.orange;
++      weight = FontWeight.bold;
++    } else if (!_isFaceDetected) {
++      text = "Tempatkan wajah di dalam frame kamera.";
++    } else if (_isScoreLocked) {
++      text = "Wajah cocok! Silakan tekan tombol sidik jari.";
++      color = Colors.green;
++      weight = FontWeight.bold;
++    } else if (_isMismatch) {
++      text = "Wajah tidak cocok dengan data terdaftar.";
++      color = Colors.red;
++      weight = FontWeight.bold;
+     } else {
+-      return Text(
+-        "Pemindaian selesai! Silakan tekan tombol sidik jari.",
+-        style: const TextStyle(fontSize: 14, color: Colors.green, fontWeight: FontWeight.bold),
+-      );
++      text = "Mohon tunggu, AI sedang memindai wajah...";
++      color = Colors.orange;
++      weight = FontWeight.bold;
+     }
++
++    return Text(
++      text,
++      textAlign: TextAlign.center,
++      style: TextStyle(fontSize: 14, color: color, fontWeight: weight),
++    );
+   }
+ 
+   @override
+@@ -344,7 +441,7 @@
+       appBar: AppBar(
+         backgroundColor: surface,
+         elevation: 0,
+-        automaticallyImplyLeading: false, 
++        automaticallyImplyLeading: false,
+         title: Row(
+           children: [
+             CircleAvatar(
+@@ -370,10 +467,9 @@
+           children: [
+             Text("Biometric Check-In", style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: onSurface)),
+             const SizedBox(height: 8),
+-            
+-            // PANGGIL TEKS LOGIKA BARU DI SINI
++
+             _buildDynamicInstructionText(),
+-            
++
+             const SizedBox(height: 32),
+ 
+             Expanded(
+@@ -397,12 +493,12 @@
+                             (_cameraController != null && _cameraController!.value.isInitialized)
+                                 ? CameraPreview(_cameraController!)
+                                 : const Center(child: CircularProgressIndicator()),
+-                            
++
+                             Positioned(
+                               top: 16, bottom: 16, left: 16, right: 16,
+                               child: Container(
+                                 decoration: BoxDecoration(
+-                                  border: Border.all(color: _isScoreLocked ? Colors.green.withOpacity(0.8) : (_isFaceDetected ? Colors.orange.withOpacity(0.6) : primary.withOpacity(0.4)), width: 2), 
++                                  border: Border.all(color: _statusColor.withOpacity(_isFaceDetected ? 0.8 : 0.4), width: 2),
+                                   borderRadius: BorderRadius.circular(24)
+                                 ),
+                               ),
+@@ -415,12 +511,12 @@
+                                 children: [
+                                   _buildGlassPill(child: Row(
+                                     children: [
+-                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary), shape: BoxShape.circle)),
++                                      Container(width: 8, height: 8, decoration: BoxDecoration(color: _statusColor, shape: BoxShape.circle)),
+                                       const SizedBox(width: 8),
+-                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? "Face Verified!" : (_isFaceDetected ? "Analyzing..." : "Scanning..."))),
++                                      Text(_isScanning ? "Verifying..." : (_isScoreLocked ? "Face Verified!" : (_isMismatch ? "Not Matched" : (_isFaceDetected ? "Analyzing..." : "Scanning...")))),
+                                     ],
+                                   )),
+-                                  _buildGlassPill(child: Text("Match: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _isScoreLocked ? Colors.green : (_isFaceDetected ? Colors.orange : primary)))),
++                                  _buildGlassPill(child: Text("Match: ${_aiMatchScore.toInt()}%", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: _statusColor))),
+                                 ],
+                               ),
+                             ),
+@@ -440,12 +536,12 @@
+                 duration: const Duration(milliseconds: 200),
+                 width: 80, height: 80,
+                 decoration: BoxDecoration(
+-                  color: _isScoreLocked ? Colors.green : primary, 
++                  color: _isScoreLocked ? Colors.green : primary,
+                   shape: BoxShape.circle,
+                   border: Border.all(color: surface, width: 4),
+                   boxShadow: [BoxShadow(color: _isScoreLocked ? Colors.green.withOpacity(0.4) : primary.withOpacity(0.4), blurRadius: 15)],
+                 ),
+-                child: _isScanning 
++                child: _isScanning
+                     ? const Padding(padding: EdgeInsets.all(24.0), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
+                     : const Icon(Icons.fingerprint, color: Colors.white, size: 36),
+               ),
+@@ -469,4 +565,4 @@
+       ),
+     );
+   }
+-}
+\ No newline at end of file
++}
+diff -ruN a/lib/screens/profile_screen.dart b/lib/screens/profile_screen.dart
+--- a/lib/screens/profile_screen.dart	2026-10-16 07:35:31.057221374 +0700
++++ b/lib/screens/profile_screen.dart	2026-10-16 07:40:39.583696462 +0700
+@@ -4,6 +4,11 @@
+ import 'settings_screen.dart'; 
+ import 'login_screen.dart'; 
+ import 'edit_profile_screen.dart'; // IMPORT HALAMAN EDIT PROFILE BARU
++import 'dart:io';
++import 'package:image/image.dart' as img;
++import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
++import '../utils/face_embedder.dart';
++import '../utils/face_store.dart';
+ 
+ class ProfileScreen extends StatefulWidget {
+   const ProfileScreen({Key? key}) : super(key: key);
+@@ -38,9 +43,10 @@
+   String _avatarUrl = ''; // TAMBAHAN UNTUK NAMPUNG LINK FOTO
+   
+   // State untuk Face Recognition
+-  int _registeredFacesCount = 0; 
+-  final int _maxFaces = 3; 
+-  final int _minFaces = 1; 
++  int _registeredFacesCount = 0;
++  int _staleFaces = 0; // data wajah lama (format/model lain) yang tidak bisa dipakai 
++  final int _maxFaces = FaceStore.maxFaces; 
++  final int _minFaces = FaceStore.minFaces; 
+ 
+   // State untuk switch 2FA
+   bool _is2faEnabled = true;
+@@ -78,61 +84,102 @@
+           _userIdDisplay = 'ID: Belum diisi';
+         }
+ 
+-        final rawEmbeddings = response['face_embeddings'];
+-        if (rawEmbeddings is List) {
+-          _registeredFacesCount = rawEmbeddings.length;
+-        } else {
+-          _registeredFacesCount = 0;
+-        }
+       });
++      _refreshFaceCount();
+     } catch (e) {
+       print("ERROR SUPABASE: $e");
+     }
+   }
+ 
+-  // FUNGSI UNTUK MEMBUKA KAMERA/GALERI & UPDATE JSONB face_embeddings
++  Future<void> _refreshFaceCount() async {
++    try {
++      final profile = await FaceStore.load();
++      if (!mounted) return;
++      setState(() {
++        _registeredFacesCount = profile.embeddings.length;
++        _staleFaces = profile.staleCount;
++      });
++    } catch (e) {
++      debugPrint("Gagal memuat wajah terdaftar: $e");
++    }
++  }
++
++  void _snack(String msg) {
++    if (!mounted) return;
++    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
++  }
++
++  // Memilih foto, mendeteksi wajah, membuat embedding ASLI dengan model TFLite, lalu menyimpannya.
+   Future<void> _pickAndRegisterFace(ImageSource source) async {
++    FaceDetector? detector;
+     try {
+       final XFile? image = await _picker.pickImage(
+         source: source,
+         preferredCameraDevice: CameraDevice.front,
+-        imageQuality: 80,
++        maxWidth: 1280,
++        maxHeight: 1280,
++        imageQuality: 90,
+       );
++      if (image == null) return;
+ 
+-      if (image != null) {
+-        setState(() => _isUploadingFace = true);
+-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Memproses wajah (Ekstraksi Embedding)...")));
+-
+-        final supabase = Supabase.instance.client;
+-
+-        if (_userDbId.isNotEmpty) {
+-          final checkDb = await supabase.from('profiles').select('face_embeddings').eq('id', _userDbId).single();
+-          
+-          List<dynamic> currentEmbeddings = [];
+-          if (checkDb['face_embeddings'] is List) {
+-            currentEmbeddings = List<dynamic>.from(checkDb['face_embeddings']);
+-          }
+-
+-          currentEmbeddings.add({
+-            "timestamp": DateTime.now().toIso8601String(),
+-            "data": "simulated_embedding_vector_data" 
+-          });
+-
+-          await supabase
+-              .from('profiles')
+-              .update({'face_embeddings': currentEmbeddings})
+-              .eq('id', _userDbId);
+-          
+-          setState(() {
+-            _registeredFacesCount = currentEmbeddings.length;
+-          });
+-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Wajah berhasil diregistrasi! ($_registeredFacesCount/$_maxFaces)")));
+-        }
+-      }
++      setState(() => _isUploadingFace = true);
++      _snack("Memproses wajah (ekstraksi embedding)...");
++
++      final embedder = FaceEmbedder.instance;
++      await embedder.ensureLoaded();
++
++      final decoded = img.decodeImage(await File(image.path).readAsBytes());
++      if (decoded == null) throw Exception("Foto tidak bisa dibaca.");
++      final upright = img.bakeOrientation(decoded);
++
++      detector = FaceDetector(options: FaceDetectorOptions(performanceMode: FaceDetectorMode.accurate));
++      final faces = await detector.processImage(InputImage.fromFilePath(image.path));
++      if (faces.isEmpty) throw Exception("Wajah tidak terdeteksi. Gunakan foto yang jelas dan menghadap kamera.");
++      if (faces.length > 1) throw Exception("Terdeteksi lebih dari satu wajah. Gunakan foto satu orang saja.");
++
++      final box = faces.first.boundingBox;
++      if (box.width < upright.width * 0.15) throw Exception("Wajah terlalu kecil di foto. Dekatkan kamera.");
++
++      final embedding = embedder.embedImageFace(upright, box);
++      final count = await FaceStore.add(embedding);
++
++      if (!mounted) return;
++      setState(() {
++        _registeredFacesCount = count;
++        _staleFaces = 0; // entri lama otomatis dibuang saat menyimpan
++      });
++      _snack("Wajah berhasil diregistrasi! ($count/$_maxFaces)");
+     } catch (e) {
+-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
++      _snack("Gagal: ${e.toString().replaceFirst('Exception: ', '')}");
+     } finally {
+-      setState(() => _isUploadingFace = false);
++      await detector?.close();
++      if (mounted) setState(() => _isUploadingFace = false);
++    }
++  }
++
++  Future<void> _confirmResetFaces() async {
++    final ok = await showDialog<bool>(
++      context: context,
++      builder: (ctx) => AlertDialog(
++        title: const Text("Reset wajah terdaftar?"),
++        content: const Text("Semua wajah terdaftar akan dihapus. Kamu perlu mendaftarkan wajah lagi sebelum bisa absen."),
++        actions: [
++          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Batal")),
++          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Reset")),
++        ],
++      ),
++    );
++    if (ok != true) return;
++    try {
++      await FaceStore.clear();
++      if (!mounted) return;
++      setState(() {
++        _registeredFacesCount = 0;
++        _staleFaces = 0;
++      });
++      _snack("Wajah terdaftar sudah direset.");
++    } catch (e) {
++      _snack("Gagal reset: $e");
+     }
+   }
+ 
+@@ -353,7 +400,7 @@
+                                   Text(
+                                     _registeredFacesCount >= _minFaces 
+                                       ? "Biometric identity active" 
+-                                      : "Minimal $_minFaces wajah dibutuhkan", 
++                                      : (_staleFaces > 0 ? "$_staleFaces data wajah lama tidak kompatibel, daftar ulang" : "Minimal $_minFaces wajah dibutuhkan"), 
+                                     style: TextStyle(fontSize: 14, color: onSurfaceVariant)
+                                   ),
+                                 ],
+@@ -424,6 +471,12 @@
+                               ],
+                             ),
+                           ),
++                        if (_registeredFacesCount > 0 || _staleFaces > 0)
++                          TextButton.icon(
++                            onPressed: _isUploadingFace ? null : _confirmResetFaces,
++                            icon: Icon(Icons.delete_outline, size: 18, color: onErrorContainer),
++                            label: Text("Reset wajah terdaftar", style: TextStyle(color: onErrorContainer, fontWeight: FontWeight.w600)),
++                          ),
+                       ],
+                     ),
+                   ),
+diff -ruN a/lib/utils/crop_sampler.dart b/lib/utils/crop_sampler.dart
+--- a/lib/utils/crop_sampler.dart	1970-01-01 07:00:00.000000000 +0700
++++ b/lib/utils/crop_sampler.dart	2026-10-16 07:40:39.583865894 +0700
+@@ -0,0 +1,68 @@
++import 'dart:typed_data';
++
++/// Sumber piksel dari gambar TEGAK (sudah diputar agar wajah tegak).
++/// Pemanggil menjamin koordinat (x, y) berada di dalam gambar.
++abstract class PixelSource {
++  int get width;
++  int get height;
++
++  /// Menulis nilai r, g, b (0..255) piksel (x, y) ke [rgb].
++  void read(int x, int y, Float64List rgb);
++}
++
++/// Mengambil kotak persegi ([left], [top], [side]) dari [src], lalu mengecilkannya
++/// ke [size] x [size] dengan interpolasi bilinear dan menormalisasi
++/// (piksel - [mean]) / [std] dalam urutan RGB, siap dimasukkan ke model.
++///
++/// Bagian kotak yang keluar dari gambar diisi nilai [mean], jadi menjadi 0 setelah normalisasi.
++Float32List sampleSquare(
++  PixelSource src,
++  double left,
++  double top,
++  double side,
++  int size,
++  double mean,
++  double std,
++) {
++  final out = Float32List(size * size * 3);
++  final step = side / size;
++  final w = src.width;
++  final h = src.height;
++  final p = Float64List(3);
++  int o = 0;
++
++  for (int j = 0; j < size; j++) {
++    final sy = top + (j + 0.5) * step - 0.5;
++    final y0 = sy.floor();
++    final fy = sy - y0;
++    for (int i = 0; i < size; i++) {
++      final sx = left + (i + 0.5) * step - 0.5;
++      final x0 = sx.floor();
++      final fx = sx - x0;
++
++      double r = 0, g = 0, b = 0;
++      for (int k = 0; k < 4; k++) {
++        final dx = k & 1;
++        final dy = k >> 1;
++        final x = x0 + dx;
++        final y = y0 + dy;
++        final wt = (dx == 0 ? 1 - fx : fx) * (dy == 0 ? 1 - fy : fy);
++        if (wt == 0) continue;
++        if (x >= 0 && y >= 0 && x < w && y < h) {
++          src.read(x, y, p);
++          r += wt * p[0];
++          g += wt * p[1];
++          b += wt * p[2];
++        } else {
++          r += wt * mean;
++          g += wt * mean;
++          b += wt * mean;
++        }
++      }
++      out[o++] = (r - mean) / std;
++      out[o++] = (g - mean) / std;
++      out[o++] = (b - mean) / std;
++    }
++  }
++  return out;
++}
+diff -ruN a/lib/utils/face_embedder.dart b/lib/utils/face_embedder.dart
+--- a/lib/utils/face_embedder.dart	1970-01-01 07:00:00.000000000 +0700
++++ b/lib/utils/face_embedder.dart	2026-10-16 07:40:39.583877120 +0700
+@@ -0,0 +1,136 @@
++import 'dart:convert';
++import 'dart:math' as math;
++import 'dart:typed_data';
++import 'dart:ui' show Rect;
++
++import 'package:camera/camera.dart';
++import 'package:flutter/foundation.dart';
++import 'package:flutter/services.dart' show rootBundle;
++import 'package:image/image.dart' as img;
++import 'package:tflite_flutter/tflite_flutter.dart';
++
++import 'image_converter.dart';
++
++/// Pembungkus model embedding wajah (TFLite).
++///
++/// CARA GANTI MODEL: ganti DUA file di folder assets/ dengan hasil Colab
++///   - model_face_embedding.tflite
++///   - face_embedding_config.json   (threshold, ukuran crop, normalisasi)
++/// Ukuran input dan dimensi embedding dibaca otomatis dari model. Wajah yang sudah
++/// didaftarkan dengan model lama otomatis dianggap kedaluwarsa (lihat [modelVersion]).
++class FaceEmbedder {
++  FaceEmbedder._();
++  static final FaceEmbedder instance = FaceEmbedder._();
++
++  static const String modelAsset = 'assets/model_face_embedding.tflite';
++  static const String configAsset = 'assets/face_embedding_config.json';
++
++  Interpreter? _interpreter;
++  Future<void>? _loading;
++
++  /// Nilai di bawah ini ditimpa oleh isi face_embedding_config.json dan model.
++  int inputSize = 224;
++  int embeddingDim = 0;
++  double threshold = 0.66;
++  double inputMean = 127.5; // preprocessing: (piksel - mean) / std, urutan RGB
++  double inputStd = 127.5;
++  double cropScale = 2.2; // sisi crop = cropScale x sisi kotak wajah (LFW: 2,2x)
++  String modelVersion = '';
++
++  bool get isReady => _interpreter != null;
++
++  Future<void> ensureLoaded() {
++    return _loading ??= _load().catchError((Object e) {
++      _loading = null; // izinkan coba lagi
++      throw e;
++    });
++  }
++
++  Future<void> _load() async {
++    final cfg = jsonDecode(await rootBundle.loadString(configAsset)) as Map<String, dynamic>;
++    threshold = ((cfg['threshold'] ?? cfg['threshold_eer']) as num?)?.toDouble() ?? threshold;
++    inputMean = (cfg['input_mean'] as num?)?.toDouble() ?? inputMean;
++    inputStd = (cfg['input_std'] as num?)?.toDouble() ?? inputStd;
++    cropScale = (cfg['crop_scale'] as num?)?.toDouble() ?? cropScale;
++
++    final data = await rootBundle.load(modelAsset);
++    final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
++    modelVersion = _fingerprint(bytes);
++
++    final options = InterpreterOptions()..threads = 2;
++    final interpreter = Interpreter.fromBuffer(bytes, options: options);
++
++    final inShape = interpreter.getInputTensor(0).shape;
++    final outShape = interpreter.getOutputTensor(0).shape;
++    if (inShape.length != 4 || inShape[3] != 3 || inShape[1] != inShape[2]) {
++      interpreter.close();
++      throw StateError('Bentuk input model tidak didukung: $inShape (butuh [1, N, N, 3])');
++    }
++    inputSize = inShape[1];
++    embeddingDim = outShape.last;
++    _interpreter = interpreter;
++    debugPrint('FaceEmbedder siap: input $inShape, output $outShape, threshold $threshold, versi $modelVersion');
++  }
++
++  /// Sidik jari ringan isi model, dipakai menandai embedding milik model yang mana.
++  static String _fingerprint(Uint8List b) {
++    int h = 0x811c9dc5;
++    h = ((h ^ b.length) * 0x01000193) & 0xFFFFFFFF;
++    for (int i = 0; i < b.length; i += 997) {
++      h = ((h ^ b[i]) * 0x01000193) & 0xFFFFFFFF;
++    }
++    return '${b.length}-${h.toRadixString(16)}';
++  }
++
++  /// [input]: Float32List sepanjang inputSize*inputSize*3 (RGB, sudah dinormalisasi).
++  /// Mengembalikan embedding yang sudah di-L2-normalize.
++  List<double> embed(Float32List input) {
++    final interpreter = _interpreter;
++    if (interpreter == null) throw StateError('FaceEmbedder belum dimuat');
++    final output = [List<double>.filled(embeddingDim, 0.0)];
++    interpreter.run(input.reshape([1, inputSize, inputSize, 3]), output);
++    return _l2Normalize(output[0]);
++  }
++
++  /// Embedding wajah dari frame kamera. [box] = kotak wajah ML Kit (koordinat gambar tegak),
++  /// [rotation] = rotasi (derajat) yang sama dengan yang diberikan ke ML Kit.
++  List<double>? embedCameraFace(CameraImage image, Rect box, int rotation) {
++    final input = FaceCropper.fromCameraImage(
++      image, box, rotation,
++      size: inputSize, scale: cropScale, mean: inputMean, std: inputStd,
++    );
++    return input == null ? null : embed(input);
++  }
++
++  /// Embedding wajah dari foto (sudah diputar tegak). [box] = kotak wajah ML Kit.
++  List<double> embedImageFace(img.Image upright, Rect box) {
++    final input = FaceCropper.fromImage(
++      upright, box,
++      size: inputSize, scale: cropScale, mean: inputMean, std: inputStd,
++    );
++    return embed(input);
++  }
++
++  static List<double> _l2Normalize(List<double> v) {
++    double s = 0;
++    for (final x in v) {
++      s += x * x;
++    }
++    final n = math.sqrt(s);
++    if (n == 0) return List<double>.from(v);
++    return [for (final x in v) x / n];
++  }
++
++  /// Cosine similarity (-1..1).
++  static double cosine(List<double> a, List<double> b) {
++    final n = math.min(a.length, b.length);
++    double dot = 0, na = 0, nb = 0;
++    for (int i = 0; i < n; i++) {
++      dot += a[i] * b[i];
++      na += a[i] * a[i];
++      nb += b[i] * b[i];
++    }
++    if (na == 0 || nb == 0) return 0;
++    return dot / (math.sqrt(na) * math.sqrt(nb));
++  }
++}
+diff -ruN a/lib/utils/face_store.dart b/lib/utils/face_store.dart
+--- a/lib/utils/face_store.dart	1970-01-01 07:00:00.000000000 +0700
++++ b/lib/utils/face_store.dart	2026-10-16 07:40:39.583831072 +0700
+@@ -0,0 +1,126 @@
++import 'package:supabase_flutter/supabase_flutter.dart';
++
++import 'face_embedder.dart';
++
++/// Hasil pembacaan wajah terdaftar milik pengguna.
++class FaceProfile {
++  FaceProfile({
++    required this.userId,
++    required this.entries,
++    required this.embeddings,
++    required this.staleCount,
++  });
++
++  final String userId;
++
++  /// Entri JSON yang valid untuk model saat ini.
++  final List<Map<String, dynamic>> entries;
++
++  /// Embedding dari [entries] (urutan sama).
++  final List<List<double>> embeddings;
++
++  /// Entri lama: format sebelumnya atau dibuat dengan model lain, tidak bisa dibandingkan.
++  final int staleCount;
++}
++
++/// Baca/tulis embedding wajah di kolom profiles.face_embeddings (jsonb, berisi array).
++///
++/// Format satu entri:
++///   {"id": "...", "created_at": "...", "model": "<versi model>", "dim": 1024, "embedding": [..]}
++class FaceStore {
++  FaceStore._();
++
++  static const int minFaces = 3;
++  static const int maxFaces = 5;
++
++  static Future<Map<String, dynamic>?> _profileRow() async {
++    final supabase = Supabase.instance.client;
++    final uid = supabase.auth.currentUser?.id;
++    final query = supabase.from('profiles').select('id, face_embeddings');
++    if (uid != null) {
++      return await query.eq('id', uid).maybeSingle();
++    }
++    // Sama seperti layar lain: tanpa sesi login, pakai profil pertama (mode pengujian).
++    return await query.limit(1).maybeSingle();
++  }
++
++  static Future<FaceProfile> load() async {
++    await FaceEmbedder.instance.ensureLoaded();
++    final row = await _profileRow();
++    final raw = row?['face_embeddings'];
++
++    final entries = <Map<String, dynamic>>[];
++    final embeddings = <List<double>>[];
++    int stale = 0;
++    if (raw is List) {
++      for (final item in raw) {
++        final emb = _parse(item);
++        if (emb == null) {
++          stale++;
++        } else {
++          entries.add(Map<String, dynamic>.from(item as Map));
++          embeddings.add(emb);
++        }
++      }
++    }
++    return FaceProfile(
++      userId: row?['id']?.toString() ?? '',
++      entries: entries,
++      embeddings: embeddings,
++      staleCount: stale,
++    );
++  }
++
++  static List<double>? _parse(dynamic item) {
++    if (item is! Map) return null;
++    final embedder = FaceEmbedder.instance;
++    if (item['model']?.toString() != embedder.modelVersion) return null;
++    final v = item['embedding'];
++    if (v is! List || v.length != embedder.embeddingDim) return null;
++    return [for (final x in v) (x as num).toDouble()];
++  }
++
++  /// Menambah satu embedding. Entri kedaluwarsa dibuang karena tidak bisa dipakai lagi.
++  /// Mengembalikan jumlah wajah valid setelah penambahan.
++  static Future<int> add(List<double> embedding) async {
++    final profile = await load();
++    if (profile.userId.isEmpty) throw Exception('Profil tidak ditemukan.');
++    if (profile.entries.length >= maxFaces) {
++      throw Exception('Maksimal $maxFaces wajah. Reset dulu untuk mengganti.');
++    }
++    final now = DateTime.now();
++    final entry = <String, dynamic>{
++      'id': now.microsecondsSinceEpoch.toString(),
++      'created_at': now.toUtc().toIso8601String(),
++      'model': FaceEmbedder.instance.modelVersion,
++      'dim': embedding.length,
++      'embedding': [for (final x in embedding) (x * 1e6).round() / 1e6],
++    };
++    final updated = [...profile.entries, entry];
++    await Supabase.instance.client
++        .from('profiles')
++        .update({'face_embeddings': updated})
++        .eq('id', profile.userId);
++    return updated.length;
++  }
++
++  /// Menghapus semua wajah terdaftar (termasuk entri lama).
++  static Future<void> clear() async {
++    final profile = await load();
++    if (profile.userId.isEmpty) throw Exception('Profil tidak ditemukan.');
++    await Supabase.instance.client
++        .from('profiles')
++        .update({'face_embeddings': <dynamic>[]})
++        .eq('id', profile.userId);
++  }
++
++  /// Kemiripan tertinggi antara [probe] dan semua embedding terdaftar.
++  static double bestMatch(List<double> probe, List<List<double>> enrolled) {
++    double best = -1;
++    for (final e in enrolled) {
++      final s = FaceEmbedder.cosine(probe, e);
++      if (s > best) best = s;
++    }
++    return best;
++  }
++}
+diff -ruN a/lib/utils/image_converter.dart b/lib/utils/image_converter.dart
+--- a/lib/utils/image_converter.dart	2026-10-16 07:35:31.057757493 +0700
++++ b/lib/utils/image_converter.dart	2026-10-16 07:40:39.583853369 +0700
+@@ -0,0 +1,176 @@
++import 'dart:math' as math;
++import 'dart:typed_data';
++import 'dart:ui' show Rect;
++
++import 'package:camera/camera.dart';
++import 'package:image/image.dart' as img;
++
++import 'crop_sampler.dart';
++
++/// Memotong wajah dari frame kamera atau foto, lalu mengubahnya ke tensor input model.
++///
++/// Kotak wajah dari ML Kit diperlebar [scale] kali menjadi persegi supaya framing-nya
++/// mirip data latih LFW (wajah memenuhi sekitar 1/2,2 sisi gambar, rambut dan latar ikut terlihat).
++class FaceCropper {
++  FaceCropper._();
++
++  /// [faceBox] dalam koordinat gambar TEGAK (seperti yang dikembalikan ML Kit),
++  /// [rotationDegrees] = rotasi searah jarum jam untuk menegakkan frame (sama dengan yang diberikan ke ML Kit).
++  /// Mengembalikan null kalau format frame tidak didukung.
++  static Float32List? fromCameraImage(
++    CameraImage image,
++    Rect faceBox,
++    int rotationDegrees, {
++    required int size,
++    required double scale,
++    required double mean,
++    required double std,
++  }) {
++    final src = _CameraSource.create(image, rotationDegrees);
++    if (src == null) return null;
++    return _crop(src, faceBox, size, scale, mean, std);
++  }
++
++  /// [upright] = foto yang sudah tegak (setelah bakeOrientation), [faceBox] dalam koordinat foto itu.
++  static Float32List fromImage(
++    img.Image upright,
++    Rect faceBox, {
++    required int size,
++    required double scale,
++    required double mean,
++    required double std,
++  }) {
++    return _crop(_ImageSource(upright), faceBox, size, scale, mean, std);
++  }
++
++  static Float32List _crop(PixelSource src, Rect box, int size, double scale, double mean, double std) {
++    final side = math.max(box.width, box.height) * scale;
++    final c = box.center;
++    return sampleSquare(src, c.dx - side / 2, c.dy - side / 2, side, size, mean, std);
++  }
++}
++
++class _ImageSource implements PixelSource {
++  _ImageSource(this._image);
++  final img.Image _image;
++
++  @override
++  int get width => _image.width;
++
++  @override
++  int get height => _image.height;
++
++  @override
++  void read(int x, int y, Float64List rgb) {
++    final p = _image.getPixel(x, y);
++    rgb[0] = p.r.toDouble();
++    rgb[1] = p.g.toDouble();
++    rgb[2] = p.b.toDouble();
++  }
++}
++
++enum _Layout { nv21, yuv420, bgra }
++
++/// Membaca piksel TEGAK langsung dari frame mentah kamera, tanpa membuat gambar perantara.
++class _CameraSource implements PixelSource {
++  _CameraSource._(this._image, this._rotation, this._layout)
++      : _p0 = _image.planes[0].bytes,
++        _stride0 = _image.planes[0].bytesPerRow,
++        _p1 = _image.planes.length > 1 ? _image.planes[1].bytes : null,
++        _stride1 = _image.planes.length > 1 ? _image.planes[1].bytesPerRow : 0,
++        _pix1 = _image.planes.length > 1 ? (_image.planes[1].bytesPerPixel ?? 1) : 1,
++        _p2 = _image.planes.length > 2 ? _image.planes[2].bytes : null,
++        _stride2 = _image.planes.length > 2 ? _image.planes[2].bytesPerRow : 0,
++        _pix2 = _image.planes.length > 2 ? (_image.planes[2].bytesPerPixel ?? 1) : 1;
++
++  final CameraImage _image;
++  final int _rotation;
++  final _Layout _layout;
++  final Uint8List _p0;
++  final int _stride0;
++  final Uint8List? _p1;
++  final int _stride1;
++  final int _pix1;
++  final Uint8List? _p2;
++  final int _stride2;
++  final int _pix2;
++
++  static _CameraSource? create(CameraImage image, int rotation) {
++    if (image.planes.isEmpty) return null;
++    final rot = ((rotation % 360) + 360) % 360;
++    if (rot % 90 != 0) return null;
++
++    if (image.planes.length >= 3) {
++      return _CameraSource._(image, rot, _Layout.yuv420);
++    }
++    if (image.format.group == ImageFormatGroup.bgra8888) {
++      return _CameraSource._(image, rot, _Layout.bgra);
++    }
++    // NV21: satu plane berisi Y lalu V/U berselang-seling (ukuran total = stride * tinggi * 1,5)
++    final plane = image.planes[0];
++    if (plane.bytes.length < plane.bytesPerRow * image.height * 3 ~/ 2) return null;
++    return _CameraSource._(image, rot, _Layout.nv21);
++  }
++
++  bool get _swap => _rotation == 90 || _rotation == 270;
++
++  @override
++  int get width => _swap ? _image.height : _image.width;
++
++  @override
++  int get height => _swap ? _image.width : _image.height;
++
++  @override
++  void read(int ux, int uy, Float64List rgb) {
++    final w = _image.width;
++    final h = _image.height;
++
++    // Titik (ux, uy) pada gambar tegak -> titik (rx, ry) pada frame mentah.
++    int rx = ux;
++    int ry = uy;
++    switch (_rotation) {
++      case 90:
++        rx = uy;
++        ry = h - 1 - ux;
++        break;
++      case 180:
++        rx = w - 1 - ux;
++        ry = h - 1 - uy;
++        break;
++      case 270:
++        rx = w - 1 - uy;
++        ry = ux;
++        break;
++    }
++
++    switch (_layout) {
++      case _Layout.bgra:
++        final i = ry * _stride0 + rx * 4;
++        rgb[0] = _p0[i + 2].toDouble();
++        rgb[1] = _p0[i + 1].toDouble();
++        rgb[2] = _p0[i].toDouble();
++        break;
++      case _Layout.nv21:
++        final yNv = _p0[ry * _stride0 + rx].toDouble();
++        final uvNv = _stride0 * h + (ry >> 1) * _stride0 + (rx & ~1);
++        _yuvToRgb(yNv, _p0[uvNv + 1].toDouble(), _p0[uvNv].toDouble(), rgb); // urutan NV21: V lalu U
++        break;
++      case _Layout.yuv420:
++        final y420 = _p0[ry * _stride0 + rx].toDouble();
++        final u420 = _p1![(ry >> 1) * _stride1 + (rx >> 1) * _pix1].toDouble();
++        final v420 = _p2![(ry >> 1) * _stride2 + (rx >> 1) * _pix2].toDouble();
++        _yuvToRgb(y420, u420, v420, rgb);
++        break;
++    }
++  }
++
++  static void _yuvToRgb(double y, double u, double v, Float64List rgb) {
++    final uu = u - 128.0;
++    final vv = v - 128.0;
++    rgb[0] = _clamp255(y + 1.402 * vv);
++    rgb[1] = _clamp255(y - 0.344136 * uu - 0.714136 * vv);
++    rgb[2] = _clamp255(y + 1.772 * uu);
++  }
++
++  static double _clamp255(double v) => v < 0 ? 0 : (v > 255 ? 255 : v);
++}
+diff -ruN a/pubspec.yaml b/pubspec.yaml
+--- a/pubspec.yaml	2026-10-16 07:35:31.059442646 +0700
++++ b/pubspec.yaml	2026-10-16 07:40:39.585189483 +0700
+@@ -30,5 +30,5 @@
+ flutter:
+   uses-material-design: true
+   assets:
+-    - assets/model_face_recognition.tflite # Pastikan kamu membuat folder 'assets' dan menaruh file .tflite milikmu di sini
+-    - assets/labels.txt # (Opsional) Jika ada file label
+\ No newline at end of file
++    - assets/model_face_embedding.tflite # model embedding wajah (hasil Colab, cell 6)
++    - assets/face_embedding_config.json  # threshold & parameter preprocessing (hasil Colab, cell 6)
